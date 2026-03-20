@@ -1,80 +1,76 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
 
+	"github.com/lsongdev/openai-go/mcp"
 	"github.com/lsongdev/openai-go/openai"
+	"github.com/lsongdev/openai-go/tools"
 )
 
 func main() {
+	// Create MCP manager with multiple servers
+	mcpServerConfigs := map[string]*mcp.McpServerConfig{
+		"filesystem": {
+			Command: "npx",
+			Args: []string{
+				"-y",
+				"@modelcontextprotocol/server-filesystem",
+				"/Users/Lsong/Projects",
+			},
+		},
+		"time": {
+			Command: "uvx",
+			Args: []string{
+				"mcp-server-time",
+				"--local-timezone=America/New_York",
+			},
+		},
+	}
+
+	manager := tools.NewMcpManager(mcpServerConfigs)
+
+	// Use with OpenAI client
 	client, err := openai.NewClient(&openai.Configuration{
-		API:    "https://api.deepseek.com",
-		APIKey: "sk-xxx",
+		API:    os.Getenv("OPENAI_API"),
+		APIKey: os.Getenv("OPENAI_KEY"),
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	// List available models
 	models, err := client.Models()
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Printf("Available models: %d\n", len(models))
 	for _, model := range models {
-		log.Printf("Model: %s\n", model.ID)
+		log.Printf("  - Model: %s\n", model.ID)
 	}
-	message := openai.ChatCompletionMessage{
-		Role: openai.RoleUser,
-		// Content: "what is the current time?",
-		Content: "Hello!",
-	}
-	tools := []openai.ToolDef{
-		{
-			Type: "function",
-			Function: openai.FunctionDef{
-				Name:        "get_current_time",
-				Description: "Get the current time",
-			},
-		},
-	}
+
 	request := &openai.ChatCompletionRequest{
-		Model: "deepseek-reasoner",
-		// MaxTokens: 2048,
-		// Temperature:     0,
-		// NumberOfChoices: 1,
+		Model: openai.DeepSeekChat,
 		Messages: []openai.ChatCompletionMessage{
-			message,
+			openai.UserMessage("What time is it? Also list files in my projects directory."),
 		},
-		Tools:  tools,
-		Stream: true,
+		Tools: manager.ToolDefs,
+		// Stream: true,
 	}
-
-	if request.Stream {
-		resp, err := client.CreateChatCompletionStream(request)
-		if err != nil {
-			log.Fatal(err)
-		}
-		for r := range resp {
-			printResponse(&r)
-		}
-	} else {
-		resp, err := client.CreateChatCompletion(request)
-		if err != nil {
-			log.Fatal(err)
-		}
-		printResponse(&resp)
+	resp, err := client.CreateChatCompletion(request)
+	if err != nil {
+		log.Fatal(err)
 	}
-
-}
-
-func printResponse(resp *openai.ChatCompletionResponse) {
 	message := resp.GetMessage()
-	if message.ReasoningContent != "" {
-		log.Printf("Reasoning: %s\n", resp.GetMessage().ReasoningContent)
-	}
-	log.Println("Content:", message.Content)
-	choice := resp.GetFirstChoice()
-	if choice.FinishReason != "" {
-		log.Println("FinishReason:", choice.FinishReason)
-		log.Println("Usage", resp.Usage)
+	log.Println("response:", message.Content)
+
+	ctx := context.Background()
+	for _, tc := range message.ToolCalls {
+		log.Println(tc.Function.Name, tc.Function.Arguments)
+		tool := manager.Tools[tc.Function.Name]
+		result := tool.Run(ctx, tc.Function.Arguments)
+		log.Println(result)
 	}
 }

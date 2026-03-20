@@ -324,16 +324,16 @@ func ToolResultMessage(toolCallID, name, content string) ChatCompletionMessage {
 // Create chat completion
 // https://platform.openai.com/docs/api-reference/chat/create
 func (openai *OpenAIClient) CreateChatCompletion(request *ChatCompletionRequest) (resp ChatCompletionResponse, err error) {
-	data, err := openai.MakeRequest("/chat/completions", request)
+	body, err := openai.MakeRequest("/chat/completions", request)
 	if err != nil {
 		return
 	}
-	body, err := io.ReadAll(data)
+	data, err := io.ReadAll(body)
 	if err != nil {
 		return resp, err
 	}
-	// log.Println(string(body))
-	err = json.Unmarshal(body, &resp)
+	// log.Println(string(data))
+	err = json.Unmarshal(data, &resp)
 	if err != nil {
 		return resp, err
 	}

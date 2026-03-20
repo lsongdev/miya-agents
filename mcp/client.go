@@ -11,6 +11,7 @@ import (
 	"github.com/lsongdev/jsonrpc-go/jsonrpc"
 	"github.com/lsongdev/jsonrpc-go/jsonrpc/common"
 	"github.com/lsongdev/jsonrpc-go/jsonrpc/transports"
+	"github.com/lsongdev/openai-go/openai"
 )
 
 // InitializeParams represents the parameters for the initialize method.
@@ -64,6 +65,24 @@ type Tool struct {
 	InputSchema json.RawMessage `json:"inputSchema"`
 }
 
+func (t *Tool) Def() openai.ToolDef {
+	var params map[string]any
+	if err := json.Unmarshal(t.InputSchema, &params); err != nil {
+		params = map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
+	}
+	return openai.ToolDef{
+		Type: "function",
+		Function: openai.FunctionDef{
+			Name:        t.Name,
+			Description: t.Description,
+			Parameters:  params,
+		},
+	}
+}
+
 // ToolResult represents the result of calling a tool.
 type ToolResult struct {
 	Content []Content      `json:"content"`
@@ -100,11 +119,16 @@ func NewClient(transport common.Transport) *Client {
 	}
 }
 
+type McpServerConfig struct {
+	Command string            `json:"command"`
+	Args    []string          `json:"args"`
+	Env     map[string]string `json:"env,omitempty"`
+}
+
 // NewStdioClient creates a new MCP client that communicates via stdio.
 // For example: NewStdioClient("npx", "-y", "12306-mcp")
-func NewStdioClient(command string, args ...string) (*Client, error) {
-	cmd := exec.Command(command, args...)
-
+func NewStdioClient(server *McpServerConfig) (*Client, error) {
+	cmd := exec.Command(server.Command, server.Args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stdin pipe: %w", err)
@@ -180,7 +204,6 @@ func (c *Client) ListTools() ([]Tool, error) {
 	var result struct {
 		Tools []Tool `json:"tools"`
 	}
-
 	if err := c.Call("tools/list", nil, &result); err != nil {
 		return nil, err
 	}
