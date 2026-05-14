@@ -8,34 +8,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 )
 
-type OpenAIErrorResponse struct {
-	Message string `json:"message"`
-	Type    string `json:"type"`
-	Param   string `json:"param"`
-	Code    string `json:"code"`
-}
-
-type Configuration struct {
-	API    string
-	APIKey string `json:"api_key"`
-}
-
-type OpenAIClient struct {
+type Client struct {
 	config *Configuration
 	client *http.Client
 }
 
-func NewClient(config *Configuration) (openai *OpenAIClient, err error) {
-	client := http.DefaultClient
-	openai = &OpenAIClient{config, client}
-	return
+func NewClient(config *Configuration) (*Client, error) {
+	return &Client{config, http.DefaultClient}, nil
 }
 
-func (client OpenAIClient) MakeRequest(path string, data interface{}) (io.ReadCloser, error) {
+func (c *Client) SetHTTPClient(client *http.Client) {
+	c.client = client
+}
+
+func (client *Client) MakeRequest(ctx context.Context, path string, data interface{}) (io.ReadCloser, error) {
 	var req *http.Request
 	var err error
 
@@ -44,13 +35,13 @@ func (client OpenAIClient) MakeRequest(path string, data interface{}) (io.ReadCl
 		if err != nil {
 			return nil, fmt.Errorf("json error: %v", err)
 		}
-		req, err = http.NewRequest("POST", client.config.API+path, bytes.NewBuffer(payload))
+		req, err = http.NewRequestWithContext(ctx, "POST", client.config.API+path, bytes.NewBuffer(payload))
 		if err != nil {
 			return nil, fmt.Errorf("invalid request: %v", err)
 		}
 		req.Header.Add("Content-Type", "application/json")
 	} else {
-		req, err = http.NewRequest("GET", client.config.API+path, nil)
+		req, err = http.NewRequestWithContext(ctx, "GET", client.config.API+path, nil)
 		if err != nil {
 			return nil, fmt.Errorf("invalid request: %v", err)
 		}
@@ -62,6 +53,8 @@ func (client OpenAIClient) MakeRequest(path string, data interface{}) (io.ReadCl
 		return nil, fmt.Errorf("cannot make request: %v", err)
 	}
 	if res.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(res.Body)
+		log.Println(string(data))
 		return nil, fmt.Errorf("invalid status code: %s", res.Status)
 	}
 	return res.Body, nil
@@ -75,8 +68,8 @@ type Model struct {
 }
 
 // Models fetches the list of available models from the API
-func (client *OpenAIClient) Models() (models []Model, err error) {
-	body, err := client.MakeRequest("/models", nil)
+func (client *Client) Models() (models []Model, err error) {
+	body, err := client.MakeRequest(context.Background(), "/models", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch models: %v", err)
 	}
@@ -89,41 +82,6 @@ func (client *OpenAIClient) Models() (models []Model, err error) {
 		return nil, fmt.Errorf("failed to decode response: %v", err)
 	}
 	return response.Data, nil
-}
-
-const (
-	RoleSystem    = "system"
-	RoleAssistant = "assistant"
-	RoleUser      = "user"
-	RoleTool      = "tool"
-)
-
-const (
-	GPT3_5_Trubo      = "gpt-3.5-turbo"
-	GPT3_5_Trubo_0301 = "gpt-3.5-turbo-0301"
-	GPT4              = "gpt-4"
-	GPT4o             = "gpt-4o"
-	DeepSeekChat      = "deepseek-chat"
-)
-
-// Tool represents an executable tool.
-type Tool interface {
-	Def() ToolDef
-	Run(ctx context.Context, args string) string
-}
-
-// ToolCall represents a tool invocation by the model.
-type ToolCall struct {
-	Index    int          `json:"index,omitempty"`
-	ID       string       `json:"id"`
-	Type     string       `json:"type"` // "function"
-	Function FunctionCall `json:"function"`
-}
-
-// FunctionCall represents a function call within a tool call.
-type FunctionCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"` // JSON string
 }
 
 // MessageBuilder helps accumulate streaming response data.
@@ -150,6 +108,9 @@ func (b *MessageBuilder) Update(chunk ChatCompletionMessage) {
 	b.message.Content += chunk.Content
 
 	// Accumulate tool calls by index
+	if chunk.ToolCalls == nil {
+		return
+	}
 	for _, tc := range chunk.ToolCalls {
 		idx := tc.Index
 		if existing, ok := b.toolCallMap[idx]; ok {
@@ -186,6 +147,9 @@ func (b *MessageBuilder) Build() ChatCompletionMessage {
 				}
 			}
 		}
+		if b.message.ToolCalls == nil {
+			b.message.ToolCalls = []ToolCall{}
+		}
 		for _, idx := range indices {
 			tc := *b.toolCallMap[idx]
 			tc.Index = 0 // Reset index
@@ -193,60 +157,6 @@ func (b *MessageBuilder) Build() ChatCompletionMessage {
 		}
 	}
 	return b.message
-}
-
-// ToolDef defines a tool for the LLM (OpenAI function calling format).
-type ToolDef struct {
-	Type     string      `json:"type"` // "function"
-	Function FunctionDef `json:"function"`
-}
-
-// FunctionDef defines a function that the model can call.
-type FunctionDef struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Parameters  map[string]any `json:"parameters"` // JSON Schema
-}
-
-type ChatCompletionRequest struct {
-	Model           string                  `json:"model,omitempty"`
-	Messages        []ChatCompletionMessage `json:"messages,omitempty"`
-	Tools           []ToolDef               `json:"tools,omitempty"`
-	Temperature     float64                 `json:"temperature,omitempty"`
-	TopP            string                  `json:"top_p,omitempty"`
-	NumberOfChoices int                     `json:"n,omitempty"`
-	Stream          bool                    `json:"stream,omitempty"`
-	Stop            []string                `json:"stop,omitempty"`
-	MaxTokens       int                     `json:"max_tokens,omitempty"`
-	User            string                  `json:"user,omitempty"`
-}
-
-type CompletionUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-
-	PromptTokensDetails struct {
-		CachedTokens int `json:"cached_tokens,omitempty"`
-	} `json:"prompt_tokens_details,omitempty"`
-
-	CompletionTokensDetails struct {
-		ReasoningTokens int `json:"reasoning_tokens,omitempty"` // deepseek-reasoner
-	} `json:"completion_tokens_details,omitempty"`
-
-	PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens,omitempty"`  // deepseek-reasoner
-	PromptCacheMissTokens int `json:"prompt_cache_miss_tokens,omitempty"` // deepseek-reasoner
-}
-
-type ChatCompletionResponse struct {
-	Error             OpenAIErrorResponse    `json:"error,omitempty"`
-	ID                string                 `json:"id"`
-	Object            string                 `json:"object"`
-	Created           int64                  `json:"created"`
-	Model             string                 `json:"model"`
-	Choices           []ChatCompletionChoice `json:"choices"`
-	Usage             CompletionUsage        `json:"usage,omitempty"`
-	SystemFingerprint string                 `json:"system_fingerprint,omitempty"` // deepseek-reasoner
 }
 
 func (resp *ChatCompletionResponse) GetFirstChoice() *ChatCompletionChoice {
@@ -262,23 +172,32 @@ func (resp *ChatCompletionResponse) GetMessage() *ChatCompletionMessage {
 		return nil
 	}
 	if !choice.Delta.IsEmpty() {
-		return &choice.Delta
+		return choice.Delta
 	}
-	return &choice.Message
+	return choice.Message
 }
 
 type ChatCompletionChoice struct {
-	Index   int                   `json:"index"`
-	Message ChatCompletionMessage `json:"message,omitempty"`
-	Delta   ChatCompletionMessage `json:"delta,omitempty"` // for streaming responses
+	Index   int                    `json:"index"`
+	Message *ChatCompletionMessage `json:"message,omitzero"`
+	Delta   *ChatCompletionMessage `json:"delta,omitzero"` // for streaming responses
 
 	LogProbs     any    `json:"logprobs,omitempty"`
 	FinishReason string `json:"finish_reason,omitempty"`
 }
 
+type ContentPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL    string `json:"url"`
+		Detail string `json:"detail,omitempty"`
+	} `json:"image_url,omitempty"`
+}
+
 type ChatCompletionMessage struct {
-	Role             string `json:"role"`                        // system, user, assistant, tool
-	Content          string `json:"content,omitempty"`           // text content
+	Role             string `json:"role,omitempty"`              // system, user, assistant, tool
+	Content          string `json:"content,omitempty"`           // text content (string or array of parts)
 	ReasoningContent string `json:"reasoning_content,omitempty"` // deepseek-reasoner
 
 	// tools calls request
@@ -288,8 +207,39 @@ type ChatCompletionMessage struct {
 	Name       string `json:"name,omitempty"`         // tool name for tool results
 }
 
+func (m *ChatCompletionMessage) UnmarshalJSON(data []byte) error {
+	type Alias ChatCompletionMessage
+	aux := &struct {
+		Content json.RawMessage `json:"content,omitempty"`
+		*Alias
+	}{Alias: (*Alias)(m)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if len(aux.Content) == 0 {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(aux.Content, &s); err == nil {
+		m.Content = s
+		return nil
+	}
+	var parts []ContentPart
+	if err := json.Unmarshal(aux.Content, &parts); err != nil {
+		return fmt.Errorf("content must be a string or array of content parts: %v", err)
+	}
+	var texts []string
+	for _, p := range parts {
+		if p.Type == "text" {
+			texts = append(texts, p.Text)
+		}
+	}
+	m.Content = strings.Join(texts, "\n")
+	return nil
+}
+
 func (m *ChatCompletionMessage) IsEmpty() bool {
-	return m.Role == "" && m.Content == "" && m.ReasoningContent == "" && len(m.ToolCalls) == 0
+	return m.Role == "" && m.Content == "" && m.ReasoningContent == "" && (len(m.ToolCalls) == 0)
 }
 
 func (m *ChatCompletionMessage) HasToolCall() bool {
@@ -321,10 +271,9 @@ func ToolResultMessage(toolCallID, name, content string) ChatCompletionMessage {
 	return ChatCompletionMessage{Role: "tool", ToolCallID: toolCallID, Name: name, Content: content}
 }
 
-// Create chat completion
-// https://platform.openai.com/docs/api-reference/chat/create
-func (openai *OpenAIClient) CreateChatCompletion(request *ChatCompletionRequest) (resp ChatCompletionResponse, err error) {
-	body, err := openai.MakeRequest("/chat/completions", request)
+// CreateChatCompletion sends a non-streaming chat completion request.
+func (c *Client) CreateChatCompletion(ctx context.Context, request *ChatCompletionRequest) (resp ChatCompletionResponse, err error) {
+	body, err := c.MakeRequest(ctx, "/chat/completions", request)
 	if err != nil {
 		return
 	}
@@ -337,7 +286,7 @@ func (openai *OpenAIClient) CreateChatCompletion(request *ChatCompletionRequest)
 	if err != nil {
 		return resp, err
 	}
-	if resp.Error.Code != "" {
+	if resp.Error != nil && resp.Error.Code != "" {
 		err = errors.New(resp.Error.Message)
 	}
 	return resp, err
@@ -356,9 +305,9 @@ func (stream *ChatCompletionStream) Close() {
 }
 
 // CreateChatCompletionStream creates a streaming chat completion
-func (openai *OpenAIClient) CreateChatCompletionStream(request *ChatCompletionRequest) (resp chan ChatCompletionResponse, err error) {
+func (c *Client) CreateChatCompletionStream(ctx context.Context, request *ChatCompletionRequest) (resp chan ChatCompletionResponse, err error) {
 	resp = make(chan ChatCompletionResponse)
-	data, err := openai.MakeRequest("/chat/completions", request)
+	data, err := c.MakeRequest(ctx, "/chat/completions", request)
 	if err != nil {
 		return
 	}
@@ -368,6 +317,7 @@ func (openai *OpenAIClient) CreateChatCompletionStream(request *ChatCompletionRe
 		reader := bufio.NewReader(data)
 		for {
 			line, err := reader.ReadString('\n')
+
 			if err != nil {
 				return
 			}
