@@ -1,0 +1,310 @@
+package openai
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"strings"
+
+	"github.com/lsongdev/openai-go/sse"
+)
+
+type ChatClient interface {
+	CreateChatCompletion(ctx context.Context, request *ChatCompletionRequest) (*ChatCompletionResponse, error)
+	CreateChatCompletionStream(ctx context.Context, request *ChatCompletionRequest) (<-chan ChatCompletionResponse, error)
+	CreateEmbeddings(ctx context.Context, request *EmbeddingRequest) (*EmbeddingResponse, error)
+}
+
+type Client struct {
+	config *Configuration
+	client *http.Client
+}
+
+func NewClient(config *Configuration) (*Client, error) {
+	return &Client{config, http.DefaultClient}, nil
+}
+
+func (c *Client) SetHTTPClient(client *http.Client) {
+	c.client = client
+}
+
+func (client *Client) MakeRequest(ctx context.Context, path string, data any) (io.ReadCloser, error) {
+	var req *http.Request
+	var err error
+
+	var payload []byte
+	if data != nil {
+		payload, err = json.Marshal(data)
+		if err != nil {
+			return nil, fmt.Errorf("json error: %v", err)
+		}
+		req, err = http.NewRequestWithContext(ctx, "POST", client.config.API+path, bytes.NewBuffer(payload))
+		if err != nil {
+			return nil, fmt.Errorf("invalid request: %v", err)
+		}
+		req.Header.Add("Content-Type", "application/json")
+	} else {
+		req, err = http.NewRequestWithContext(ctx, "GET", client.config.API+path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("invalid request: %v", err)
+		}
+	}
+
+	req.Header.Add("Authorization", "Bearer "+client.config.APIKey)
+	res, err := client.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot make request: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		// d, _ := io.ReadAll(res.Body)
+		// log.Println(string(d), string(payload))
+		return nil, fmt.Errorf("invalid status code: %s", res.Status)
+	}
+	return res.Body, nil
+}
+
+// Model represents a model in the  API format
+type Model struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	OwnedBy string `json:"owned_by"`
+}
+
+// Models fetches the list of available models from the API
+func (client *Client) Models() (models []Model, err error) {
+	body, err := client.MakeRequest(context.Background(), "/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %v", err)
+	}
+	defer body.Close()
+
+	var response struct {
+		Data []Model `json:"data"`
+	}
+	if err := json.NewDecoder(body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %v", err)
+	}
+	return response.Data, nil
+}
+
+func (resp *ChatCompletionResponse) GetFirstChoice() *ChatCompletionChoice {
+	for _, choice := range resp.Choices {
+		return &choice
+	}
+	return nil
+}
+
+func (resp *ChatCompletionResponse) GetMessage() *ChatCompletionMessage {
+	choice := resp.GetFirstChoice()
+	if choice == nil {
+		return nil
+	}
+	if choice.Delta != nil && !choice.Delta.IsEmpty() {
+		return choice.Delta
+	}
+	return choice.Message
+}
+
+type ChatCompletionChoice struct {
+	Index   int                    `json:"index"`
+	Message *ChatCompletionMessage `json:"message,omitzero"`
+	Delta   *ChatCompletionMessage `json:"delta,omitzero"` // for streaming responses
+
+	LogProbs     any    `json:"logprobs,omitempty"`
+	FinishReason string `json:"finish_reason,omitempty"`
+}
+
+type ContentPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL    string `json:"url"`
+		Detail string `json:"detail,omitempty"`
+	} `json:"image_url,omitempty"`
+}
+
+type ChatCompletionMessage struct {
+	Role             string `json:"role,omitempty"`              // system, user, assistant, tool
+	Content          string `json:"content,omitempty"`           // text content (string or array of parts)
+	ReasoningContent string `json:"reasoning_content,omitempty"` // deepseek-reasoner
+
+	// tools calls request
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // for assistant messages
+	// tools results
+	ToolCallID string `json:"tool_call_id,omitempty"` // for tool result messages
+	Name       string `json:"name,omitempty"`         // tool name for tool results
+}
+
+func (m *ChatCompletionMessage) UnmarshalJSON(data []byte) error {
+	type Alias ChatCompletionMessage
+	aux := &struct {
+		Content json.RawMessage `json:"content,omitempty"`
+		*Alias
+	}{Alias: (*Alias)(m)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if len(aux.Content) == 0 {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(aux.Content, &s); err == nil {
+		m.Content = s
+		return nil
+	}
+	var parts []ContentPart
+	if err := json.Unmarshal(aux.Content, &parts); err != nil {
+		return fmt.Errorf("content must be a string or array of content parts: %v", err)
+	}
+	var texts []string
+	for _, p := range parts {
+		if p.Type == "text" {
+			texts = append(texts, p.Text)
+		}
+	}
+	m.Content = strings.Join(texts, "\n")
+	return nil
+}
+
+func (m *ChatCompletionMessage) IsEmpty() bool {
+	return m.Role == "" && m.Content == "" && m.ReasoningContent == "" && (len(m.ToolCalls) == 0)
+}
+
+func (m *ChatCompletionMessage) HasToolCall() bool {
+	return len(m.ToolCalls) > 0
+}
+
+// UserMessage creates a user message.
+func UserMessage(content string) ChatCompletionMessage {
+	return ChatCompletionMessage{Role: "user", Content: content}
+}
+
+// SystemMessage creates a system message.
+func SystemMessage(content string) ChatCompletionMessage {
+	return ChatCompletionMessage{Role: "system", Content: content}
+}
+
+// AssistantMessage creates an assistant message.
+func AssistantMessage(content string) ChatCompletionMessage {
+	return ChatCompletionMessage{Role: "assistant", Content: content}
+}
+
+// AssistantMessageWithTools creates an assistant message with tool calls.
+func AssistantMessageWithTools(content string, toolCalls []ToolCall) ChatCompletionMessage {
+	return ChatCompletionMessage{Role: "assistant", Content: content, ToolCalls: toolCalls}
+}
+
+// ToolResultMessage creates a tool result message.
+func ToolResultMessage(toolCallID, name, content string) ChatCompletionMessage {
+	return ChatCompletionMessage{Role: "tool", ToolCallID: toolCallID, Name: name, Content: content}
+}
+
+// CreateEmbeddings sends an embeddings request to the API.
+func (c *Client) CreateEmbeddings(ctx context.Context, request *EmbeddingRequest) (*EmbeddingResponse, error) {
+	body, err := c.MakeRequest(ctx, "/embeddings", request)
+	if err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	var resp EmbeddingResponse
+	err = json.Unmarshal(data, &resp)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil && resp.Error.Code != "" {
+		err = errors.New(resp.Error.Message)
+	}
+	return &resp, err
+}
+
+// CreateChatCompletion sends a non-streaming chat completion request.
+func (c *Client) CreateChatCompletion(ctx context.Context, request *ChatCompletionRequest) (*ChatCompletionResponse, error) {
+	body, err := c.MakeRequest(ctx, "/chat/completions", request)
+	if err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	var resp ChatCompletionResponse
+	err = json.Unmarshal(data, &resp)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil && resp.Error.Code != "" {
+		err = errors.New(resp.Error.Message)
+	}
+	return &resp, err
+}
+
+// ChatCompletionStream represents a streaming response channel
+type ChatCompletionStream struct {
+	Error    chan error
+	Response chan ChatCompletionResponse
+}
+
+// Close closes the stream channels
+func (stream *ChatCompletionStream) Close() {
+	close(stream.Error)
+	close(stream.Response)
+}
+
+// CreateChatCompletionStream creates a streaming chat completion
+func (c *Client) CreateChatCompletionStream(ctx context.Context, request *ChatCompletionRequest) (<-chan ChatCompletionResponse, error) {
+	resp := make(chan ChatCompletionResponse)
+
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("json error: %v", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.config.API+"/chat/completions", bytes.NewBuffer(payload))
+	if err != nil {
+		return nil, fmt.Errorf("invalid request: %v", err)
+	}
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Authorization", "Bearer "+c.config.APIKey)
+
+	stream, err := sse.Do(ctx, c.client, req)
+	if err != nil {
+		return nil, err
+	}
+
+	go func() {
+		defer close(resp)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case evt, ok := <-stream.Events:
+				if !ok {
+					return
+				}
+				if evt.Data == "[DONE]" {
+					return
+				}
+				var chunk ChatCompletionResponse
+				if err := json.Unmarshal([]byte(evt.Data), &chunk); err != nil {
+					log.Println(err)
+					continue
+				}
+				resp <- chunk
+			case err := <-stream.Err():
+				if err != nil {
+					log.Println("sse error:", err)
+				}
+				return
+			}
+		}
+	}()
+	return resp, nil
+}

@@ -59,7 +59,7 @@ func main() {
 		Tools: manager.ToolDefs,
 		// Stream: true,
 	}
-	resp, err := client.CreateChatCompletion(request)
+	resp, err := client.CreateChatCompletion(context.Background(), request)
 	if err != nil {
 		log.Fatal(err)
 	}
