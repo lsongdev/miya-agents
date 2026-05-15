@@ -60,10 +60,10 @@ type ChatCompletionRequest struct {
 	Temperature     *float64                `json:"temperature,omitempty"`
 	TopP            *float64                `json:"top_p,omitempty"`
 	NumberOfChoices *int                    `json:"n,omitempty"`
-	Stream          bool                    `json:"stream,omitempty"`
 	Stop            []string                `json:"stop,omitempty"`
 	MaxTokens       int                     `json:"max_tokens,omitempty"`
 	User            string                  `json:"user,omitempty"`
+	Stream          bool                    `json:"stream,omitempty"`
 }
 
 type CompletionUsage struct {

@@ -72,3 +72,13 @@ func (s *Stream) Stop(messageID, model, stopReason string, usage *CompletionUsag
 		Usage: usage,
 	})
 }
+
+func (s *Stream) SendError(err error) {
+	s.Send(ChatCompletionResponse{
+		Error: &Error{
+			Message: err.Error(),
+			Type:    "invalid_request_error",
+		},
+	})
+	s.Done()
+}

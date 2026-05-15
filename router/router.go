@@ -1,11 +1,9 @@
 package router
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"sync/atomic"
@@ -89,16 +87,7 @@ func (r *Router) writeError(w http.ResponseWriter, status int, message string) {
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if req.Method == http.MethodPost {
-		body, err := io.ReadAll(req.Body)
-		req.Body.Close()
-		if err != nil {
-			slog.Warn("failed to read request body", "error", err)
-			r.writeError(w, http.StatusBadRequest, "failed to read request body")
-			return
-		}
-		req.Body = io.NopCloser(bytes.NewReader(body))
-	}
+	slog.Info("ServeHTTP", "method", req.Method, "url", req.URL)
 	switch req.URL.Path {
 	case "/v1/models":
 		if req.Method != http.MethodGet {
@@ -149,6 +138,31 @@ func (r *Router) HandleChatCompletions(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
+	// for _, m := range chatReq.Messages {
+	// 	d, _ := json.Marshal(m)
+	// 	log.Println("HandleChatCompletions 请求 Messages:", string(d))
+	// }
+
+	// Sanitize messages to avoid upstream 400 errors caused by malformed tool
+	// calls or tool messages missing required tool_call_id.
+	var sanitized []openai.ChatCompletionMessage
+	for _, m := range chatReq.Messages {
+		if m.Role == openai.RoleTool && m.ToolCallID == "" {
+			continue // skip tool messages without tool_call_id
+		}
+		if m.Role == openai.RoleAssistant && len(m.ToolCalls) > 0 {
+			valid := make([]openai.ToolCall, 0, len(m.ToolCalls))
+			for _, tc := range m.ToolCalls {
+				if tc.ID != "" {
+					valid = append(valid, tc)
+				}
+			}
+			m.ToolCalls = valid
+		}
+		sanitized = append(sanitized, m)
+	}
+	chatReq.Messages = sanitized
+
 	ctx := RequestContext{
 		RequestID: r.nextRequestID(),
 		Stream:    chatReq.Stream,
@@ -188,13 +202,11 @@ func (r *Router) HandleMessages(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	chatReq := NewChatCompletionRequestFromAnthropicRequest(&anthReq)
-
 	ctx := RequestContext{
 		RequestID: r.nextRequestID(),
 		Stream:    anthReq.Stream,
 	}
-
+	chatReq := NewChatCompletionRequestFromAnthropicRequest(&anthReq)
 	providerName := ""
 	if r.onRequest != nil {
 		var err error
@@ -213,14 +225,14 @@ func (r *Router) HandleMessages(w http.ResponseWriter, req *http.Request) {
 
 	switch provider.Type {
 	case ProviderTypeAnthropic:
-		anthropicReq := NewAnthropicRequestFromChatCompletionRequest(chatReq)
-		r.handleAnthropic(w, provider, anthropicReq, req.Context(), ProviderTypeAnthropic)
+		r.handleAnthropic(w, provider, &anthReq, req.Context(), ProviderTypeAnthropic)
 	case "", ProviderTypeOpenAI:
 		client, err := r.newOpenAIClient(provider)
 		if err != nil {
 			r.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create client: %v", err))
 			return
 		}
+
 		if chatReq.Stream {
 			r.handleStreamOpenAI2Anthropic(w, client, chatReq, req.Context())
 		} else {
@@ -413,15 +425,16 @@ func (r *Router) handleNonStreamOpenAI2Anthropic(w http.ResponseWriter, client *
 }
 
 func (r *Router) streamOpenAI(w http.ResponseWriter, client *openai.Client, chatReq *openai.ChatCompletionRequest, ctx context.Context) {
+	stream := openai.NewStream(w)
 	chunks, err := client.CreateChatCompletionStream(ctx, chatReq)
 	if err != nil {
 		slog.Warn("stream upstream error", "error", err)
-		r.writeError(w, http.StatusBadGateway, fmt.Sprintf("upstream request failed: %v", err))
+		stream.SendError(err)
 		return
 	}
-
-	stream := openai.NewStream(w)
 	for chunk := range chunks {
+		// d, _ := json.Marshal(chunk)
+		// log.Println("====>", string(d))
 		stream.Send(chunk)
 	}
 	stream.Done()

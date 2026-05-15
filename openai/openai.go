@@ -86,20 +86,22 @@ func (client *Client) Models() (models []Model, err error) {
 
 // MessageBuilder helps accumulate streaming response data.
 type MessageBuilder struct {
-	message     ChatCompletionMessage
-	toolCallMap map[int]*ToolCall
+	message   ChatCompletionMessage
+	toolCalls []*ToolCall
+	idxMap    map[int]*ToolCall    // stream index -> tool call
+	idMap     map[string]*ToolCall // tool call id -> tool call
 }
 
 // CreateMessageBuilder creates a new message builder.
 func CreateMessageBuilder() *MessageBuilder {
 	return &MessageBuilder{
-		toolCallMap: make(map[int]*ToolCall),
+		idxMap: make(map[int]*ToolCall),
+		idMap:  make(map[string]*ToolCall),
 	}
 }
 
 // Update accumulates data from a stream chunk.
 func (b *MessageBuilder) Update(chunk ChatCompletionMessage) {
-	// Set role on first update
 	if b.message.Role == "" {
 		b.message.Role = RoleAssistant
 	}
@@ -107,53 +109,48 @@ func (b *MessageBuilder) Update(chunk ChatCompletionMessage) {
 	b.message.ReasoningContent += chunk.ReasoningContent
 	b.message.Content += chunk.Content
 
-	// Accumulate tool calls by index
 	if chunk.ToolCalls == nil {
 		return
 	}
 	for _, tc := range chunk.ToolCalls {
-		idx := tc.Index
-		if existing, ok := b.toolCallMap[idx]; ok {
-			// Merge into existing tool call
-			if tc.ID != "" {
-				existing.ID = tc.ID
+		if tc.ID != "" {
+			if existing, ok := b.idMap[tc.ID]; ok {
+				if tc.Type != "" {
+					existing.Type = tc.Type
+				}
+				existing.Function.Name += tc.Function.Name
+				existing.Function.Arguments += tc.Function.Arguments
+				b.idxMap[tc.Index] = existing
+			} else {
+				tcCopy := tc
+				b.toolCalls = append(b.toolCalls, &tcCopy)
+				b.idxMap[tc.Index] = b.toolCalls[len(b.toolCalls)-1]
+				b.idMap[tc.ID] = b.toolCalls[len(b.toolCalls)-1]
 			}
+		} else if existing, ok := b.idxMap[tc.Index]; ok {
 			if tc.Type != "" {
 				existing.Type = tc.Type
 			}
 			existing.Function.Name += tc.Function.Name
 			existing.Function.Arguments += tc.Function.Arguments
-		} else {
-			// New tool call
-			tcCopy := tc
-			b.toolCallMap[idx] = &tcCopy
+		} else if len(b.toolCalls) > 0 {
+			last := b.toolCalls[len(b.toolCalls)-1]
+			if tc.Type != "" {
+				last.Type = tc.Type
+			}
+			last.Function.Name += tc.Function.Name
+			last.Function.Arguments += tc.Function.Arguments
+			b.idxMap[tc.Index] = last
 		}
 	}
 }
 
 // Build returns the final accumulated message.
 func (b *MessageBuilder) Build() ChatCompletionMessage {
-	// Convert tool call map to sorted slice
-	if len(b.toolCallMap) > 0 {
-		indices := make([]int, 0, len(b.toolCallMap))
-		for idx := range b.toolCallMap {
-			indices = append(indices, idx)
-		}
-		// Sort indices
-		for i := 0; i < len(indices)-1; i++ {
-			for j := i + 1; j < len(indices); j++ {
-				if indices[i] > indices[j] {
-					indices[i], indices[j] = indices[j], indices[i]
-				}
-			}
-		}
-		if b.message.ToolCalls == nil {
-			b.message.ToolCalls = []ToolCall{}
-		}
-		for _, idx := range indices {
-			tc := *b.toolCallMap[idx]
-			tc.Index = 0 // Reset index
-			b.message.ToolCalls = append(b.message.ToolCalls, tc)
+	if len(b.toolCalls) > 0 {
+		b.message.ToolCalls = make([]ToolCall, len(b.toolCalls))
+		for i, tc := range b.toolCalls {
+			b.message.ToolCalls[i] = *tc
 		}
 	}
 	return b.message
@@ -333,8 +330,14 @@ func (c *Client) CreateChatCompletionStream(ctx context.Context, request *ChatCo
 			}
 			var chunk ChatCompletionResponse
 			if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+				log.Println(err)
 				continue
 			}
+			// if chunk.GetMessage().HasToolCall() {
+			// 	fmt.Println("wwwwww", line)
+			// } else {
+			// 	fmt.Println("xxxxxxx", line)
+			// }
 			resp <- chunk
 		}
 	}()

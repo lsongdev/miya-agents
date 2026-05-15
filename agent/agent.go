@@ -74,6 +74,9 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, output 
 		}
 		// Execute tool calls
 		for _, tc := range respMessage.ToolCalls {
+			if tc.ID == "" {
+				continue
+			}
 			tool, ok := a.toolsMap[tc.Function.Name]
 			var result string
 			if ok {
