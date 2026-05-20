@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/lsongdev/openai-go/router"
+	"github.com/lsongdev/miya-agents/router"
 )
 
 func main() {

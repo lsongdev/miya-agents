@@ -10,18 +10,18 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/lsongdev/openai-go/anthropic"
-	"github.com/lsongdev/openai-go/openai"
+	"github.com/lsongdev/miya-agents/anthropic"
+	"github.com/lsongdev/miya-agents/openai"
 )
 
 // mockResponse captures OnResponse callback data for assertions.
 type mockResponse struct {
-	mu       sync.Mutex
-	called   bool
+	mu        sync.Mutex
+	called    bool
 	requestID string
-	input    any
-	output   *openai.ChatCompletionResponse
-	err      error
+	input     any
+	output    *openai.ChatCompletionResponse
+	err       error
 }
 
 func (m *mockResponse) capture() func(*ResponseContext) {
@@ -227,7 +227,7 @@ func TestMock_Anthropic_Stream_OnResponse(t *testing.T) {
 		fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", msgStart)
 
 		deltaData, _ := json.Marshal(anthropic.Delta{Type: "text_delta", Text: "Hello"})
-		cbDelta, _ := json.Marshal(anthropic.Event{Type: "content_block_delta", Index: 0, Delta: deltaData})
+		cbDelta, _ := json.Marshal(anthropic.Event{Type: "content_block_delta", Index: new(int), Delta: deltaData})
 		fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", cbDelta)
 
 		msgDeltaData, _ := json.Marshal(anthropic.Delta{StopReason: "end_turn"})
@@ -387,7 +387,7 @@ func TestMock_Anthropic_to_OpenAI_Stream_OnResponse(t *testing.T) {
 		fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", msgStart)
 
 		deltaData, _ := json.Marshal(anthropic.Delta{Type: "text_delta", Text: "Hello"})
-		cbDelta, _ := json.Marshal(anthropic.Event{Type: "content_block_delta", Index: 0, Delta: deltaData})
+		cbDelta, _ := json.Marshal(anthropic.Event{Type: "content_block_delta", Index: new(int), Delta: deltaData})
 		fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", cbDelta)
 
 		msgDeltaData, _ := json.Marshal(anthropic.Delta{StopReason: "end_turn"})

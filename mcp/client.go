@@ -11,7 +11,7 @@ import (
 	"github.com/lsongdev/jsonrpc-go/jsonrpc"
 	"github.com/lsongdev/jsonrpc-go/jsonrpc/common"
 	"github.com/lsongdev/jsonrpc-go/jsonrpc/transports"
-	"github.com/lsongdev/openai-go/openai"
+	"github.com/lsongdev/miya-agents/openai"
 )
 
 // InitializeParams represents the parameters for the initialize method.

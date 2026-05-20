@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/lsongdev/openai-go/sse"
+	"github.com/lsongdev/miya-agents/sse"
 )
 
 type ChatClient interface {

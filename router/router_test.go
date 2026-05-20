@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lsongdev/openai-go/anthropic"
-	"github.com/lsongdev/openai-go/openai"
+	"github.com/lsongdev/miya-agents/anthropic"
+	"github.com/lsongdev/miya-agents/openai"
 )
 
 func TestOnRequestHookRejection(t *testing.T) {

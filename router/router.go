@@ -1,16 +1,16 @@
 package router
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
-	"github.com/lsongdev/openai-go/anthropic"
-	"github.com/lsongdev/openai-go/openai"
+	"github.com/lsongdev/miya-agents/anthropic"
+	"github.com/lsongdev/miya-agents/openai"
 )
 
 type ProviderType string
@@ -18,6 +18,10 @@ type ProviderType string
 const (
 	ProviderTypeOpenAI    ProviderType = "openai"
 	ProviderTypeAnthropic ProviderType = "anthropic"
+
+	// OutputFormatResponses signals that the client called /v1/responses and
+	// expects the response to be rendered in OpenAI Responses API format.
+	OutputFormatResponses ProviderType = "responses"
 )
 
 type Provider struct {
@@ -30,8 +34,16 @@ type Provider struct {
 	Models           []string
 }
 
+type RequestError struct {
+	Status  int
+	Message string
+}
+
+func (e *RequestError) Error() string {
+	return e.Message
+}
+
 type RequestContext struct {
-	parent       context.Context
 	RequestID    string
 	Response     http.ResponseWriter
 	Request      *http.Request
@@ -40,27 +52,21 @@ type RequestContext struct {
 	OutputFormat ProviderType
 }
 
-func (c *RequestContext) Deadline() (deadline time.Time, ok bool) {
-	return c.parent.Deadline()
-}
-
-func (c *RequestContext) Done() <-chan struct{} {
-	return c.parent.Done()
-}
-
-func (c *RequestContext) Err() error {
-	return c.parent.Err()
-}
-
-func (c *RequestContext) Value(key any) any {
-	return c.parent.Value(key)
+// APIKey extracts the API key from the Authorization or x-api-key header.
+// It returns an empty string if no valid key is found.
+func (ctx *RequestContext) APIKey() string {
+	auth := ctx.Request.Header.Get("Authorization")
+	if auth == "" {
+		auth = "Bearer " + ctx.Request.Header.Get("x-api-key")
+	}
+	return strings.TrimPrefix(auth, "Bearer ")
 }
 
 type ResponseContext struct {
 	RequestID string
-	Request   *http.Request
 	Response  http.ResponseWriter
-	Input     any
+	Request   *http.Request
+	Input     *openai.ChatCompletionRequest
 	Output    *openai.ChatCompletionResponse
 	Error     error
 	Duration  time.Duration
@@ -147,6 +153,8 @@ func (router *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		router.HandleMessages(w, req)
 	case "/v1/chat/completions":
 		router.HandleChatCompletions(w, req)
+	case "/v1/responses":
+		router.HandleResponses(w, req)
 	case "/v1/embeddings":
 		router.HandleEmbeddings(w, req)
 	default:
@@ -189,7 +197,7 @@ func (router *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 	}
 
 	ctx := &RequestContext{
-		parent:       r.Context(),
+		// parent:       r.Context(),
 		RequestID:    router.nextRequestID(),
 		Request:      r,
 		Response:     w,
@@ -200,9 +208,12 @@ func (router *Router) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 	start := time.Now()
 
 	if router.onRequest != nil {
-		err := router.onRequest(ctx)
-		if err != nil {
-			router.writeError(w, http.StatusForbidden, fmt.Sprintf("request rejected: %v", err))
+		if err := router.onRequest(ctx); err != nil {
+			if reqErr, ok := err.(*RequestError); ok {
+				router.writeError(w, reqErr.Status, reqErr.Message)
+			} else {
+				router.writeError(w, http.StatusForbidden, fmt.Sprintf("request rejected: %v", err))
+			}
 			return
 		}
 	}
@@ -251,7 +262,7 @@ func (router *Router) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := &RequestContext{
-		parent:       r.Context(),
+		// parent:       r.Context(),
 		RequestID:    router.nextRequestID(),
 		Request:      r,
 		Response:     w,
@@ -260,9 +271,12 @@ func (router *Router) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 	start := time.Now()
 	if router.onRequest != nil {
-		err := router.onRequest(ctx)
-		if err != nil {
-			router.writeError(w, http.StatusForbidden, fmt.Sprintf("request rejected: %v", err))
+		if err := router.onRequest(ctx); err != nil {
+			if reqErr, ok := err.(*RequestError); ok {
+				router.writeError(w, reqErr.Status, reqErr.Message)
+			} else {
+				router.writeError(w, http.StatusForbidden, fmt.Sprintf("request rejected: %v", err))
+			}
 			return
 		}
 	}
@@ -278,7 +292,7 @@ func (router *Router) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		router.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create client: %v", err))
 		return
 	}
-	resp, err := client.CreateEmbeddings(ctx, &embReq)
+	resp, err := client.CreateEmbeddings(ctx.Request.Context(), &embReq)
 	if err != nil {
 		router.writeError(w, http.StatusBadGateway, fmt.Sprintf("upstream request failed: %v", err))
 		return
@@ -312,7 +326,7 @@ func (router *Router) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	chatReq := anthropic.NewChatCompletionRequestFromAnthropicRequest(&anthReq)
 	ctx := &RequestContext{
-		parent:       r.Context(),
+		// parent:       r.Context(),
 		RequestID:    router.nextRequestID(),
 		Request:      r,
 		Response:     w,
@@ -323,9 +337,12 @@ func (router *Router) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
 	if router.onRequest != nil {
-		err := router.onRequest(ctx)
-		if err != nil {
-			router.writeError(w, http.StatusForbidden, fmt.Sprintf("request rejected: %v", err))
+		if err := router.onRequest(ctx); err != nil {
+			if reqErr, ok := err.(*RequestError); ok {
+				router.writeError(w, reqErr.Status, reqErr.Message)
+			} else {
+				router.writeError(w, http.StatusForbidden, fmt.Sprintf("request rejected: %v", err))
+			}
 			return
 		}
 	}
@@ -410,7 +427,7 @@ func (router *Router) handleOpenaiToAnthropicStream(ctx *RequestContext, w http.
 		router.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create client: %v", err))
 		return nil, err
 	}
-	chunks, err := client.CreateChatCompletionStream(ctx, ctx.Input)
+	chunks, err := client.CreateChatCompletionStream(ctx.Request.Context(), ctx.Input)
 	if err != nil {
 		slog.Warn("stream upstream error", "error", err)
 		router.writeError(w, http.StatusBadGateway, fmt.Sprintf("upstream request failed: %v", err))
@@ -427,7 +444,7 @@ func (router *Router) handleOpenaiToAnthropicNonStream(ctx *RequestContext, w ht
 		router.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create client: %v", err))
 		return nil, err
 	}
-	resp, err := client.CreateChatCompletion(ctx, ctx.Input)
+	resp, err := client.CreateChatCompletion(ctx.Request.Context(), ctx.Input)
 	if err != nil {
 		router.writeError(w, http.StatusBadGateway, fmt.Sprintf("upstream request failed: %v", err))
 		return nil, err
@@ -443,7 +460,7 @@ func (router *Router) handleOpenaiToAnthropicNonStream(ctx *RequestContext, w ht
 
 func (router *Router) handleOpenaiNonStream(ctx *RequestContext, w http.ResponseWriter, client openai.ChatClient) (*openai.ChatCompletionResponse, error) {
 	stream := openai.NewResponseWriter(w)
-	chunks, err := client.CreateChatCompletionStream(ctx, ctx.Input)
+	chunks, err := client.CreateChatCompletionStream(ctx.Request.Context(), ctx.Input)
 	if err != nil {
 		slog.Warn("stream upstream error", "error", err)
 		stream.SendError(err)
@@ -461,7 +478,7 @@ func (router *Router) handleOpenaiNonStream(ctx *RequestContext, w http.Response
 }
 
 func (router *Router) handleOpenaiStream(ctx *RequestContext, w http.ResponseWriter, client openai.ChatClient) (*openai.ChatCompletionResponse, error) {
-	resp, err := client.CreateChatCompletion(ctx, ctx.Input)
+	resp, err := client.CreateChatCompletion(ctx.Request.Context(), ctx.Input)
 	if err != nil {
 		router.writeError(w, http.StatusBadGateway, fmt.Sprintf("upstream request failed: %v", err))
 		return nil, err
@@ -482,7 +499,7 @@ func (router *Router) handleAnthropicStream(ctx *RequestContext, w http.Response
 	switch ctx.OutputFormat {
 	case ProviderTypeOpenAI:
 		chatReq := anthropic.NewChatCompletionRequestFromAnthropicRequest(anthReq)
-		chunks, err := client.CreateChatCompletionStream(ctx, chatReq)
+		chunks, err := client.CreateChatCompletionStream(ctx.Request.Context(), chatReq)
 		if err != nil {
 			router.writeError(w, http.StatusBadGateway, fmt.Sprintf("upstream request failed: %v", err))
 			return nil, err
@@ -496,7 +513,7 @@ func (router *Router) handleAnthropicStream(ctx *RequestContext, w http.Response
 		stream.Done()
 		return assembler.Build(), nil
 	default:
-		ms, err := client.CreateMessageStream(ctx, anthReq)
+		ms, err := client.CreateMessageStream(ctx.Request.Context(), anthReq)
 		if err != nil {
 			router.writeError(w, http.StatusBadGateway, fmt.Sprintf("upstream request failed: %v", err))
 			return nil, err
@@ -517,7 +534,7 @@ func (router *Router) handleAnthropicNonStream(ctx *RequestContext, w http.Respo
 
 	switch ctx.OutputFormat {
 	case ProviderTypeAnthropic:
-		resp, err := client.CreateMessage(ctx, anthReq)
+		resp, err := client.CreateMessage(ctx.Request.Context(), anthReq)
 		if err != nil {
 			router.writeError(w, http.StatusBadGateway, fmt.Sprintf("upstream request failed: %v", err))
 			return nil, err
@@ -530,7 +547,7 @@ func (router *Router) handleAnthropicNonStream(ctx *RequestContext, w http.Respo
 		return chatResp, nil
 	case ProviderTypeOpenAI:
 		chatReq := anthropic.NewChatCompletionRequestFromAnthropicRequest(anthReq)
-		resp, err := client.CreateChatCompletion(ctx, chatReq)
+		resp, err := client.CreateChatCompletion(ctx.Request.Context(), chatReq)
 		if err != nil {
 			router.writeError(w, http.StatusBadGateway, fmt.Sprintf("upstream request failed: %v", err))
 			return nil, err

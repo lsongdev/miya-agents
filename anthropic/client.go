@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/lsongdev/openai-go/sse"
+	"github.com/lsongdev/miya-agents/sse"
 )
 
 // Configuration holds the API endpoint and key for the Anthropic client.

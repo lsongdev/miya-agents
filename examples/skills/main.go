@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/lsongdev/openai-go/skills"
+	"github.com/lsongdev/miya-agents/skills"
 )
 
 func main() {

@@ -6,10 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/lsongdev/openai-go/config"
-	"github.com/lsongdev/openai-go/openai"
-	"github.com/lsongdev/openai-go/session"
-	"github.com/lsongdev/openai-go/tools"
+	"github.com/lsongdev/miya-agents/config"
+	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/session"
+	"github.com/lsongdev/miya-agents/tools"
 )
 
 type Writer interface {
@@ -17,6 +17,7 @@ type Writer interface {
 }
 
 type Agent struct {
+	Name   string
 	Config *config.AgentConfig
 	LLM    *openai.Client
 	// tools
@@ -97,6 +98,35 @@ func (a *Agent) AddTool(tool openai.Tool) {
 	a.toolsDefs = append(a.toolsDefs, d)
 }
 
+func (a *Agent) NewSession() *session.Session {
+	s := session.New(a.Name)
+	prompt := a.readSystemPrompt()
+	if prompt != "" {
+		s.Messages = append(s.Messages, openai.SystemMessage(prompt))
+	}
+	return s
+}
+
+func (a *Agent) NewSessionWithPrompt(prompt string) *session.Session {
+	s := session.New(a.Name)
+	if prompt != "" {
+		s.Messages = append(s.Messages, openai.SystemMessage(prompt))
+	}
+	return s
+}
+
+func (a *Agent) readSystemPrompt() string {
+	workspace := a.Config.GetWorkspace()
+	if workspace == "" {
+		return "You are a helpful assistant."
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, "AGENTS.md"))
+	if err != nil {
+		return "You are a helpful assistant."
+	}
+	return string(data)
+}
+
 func (a *Agent) BuildTools() {
 	workspace := a.Config.GetWorkspace()
 	var tools = []openai.Tool{
@@ -118,15 +148,4 @@ func (a *Agent) BuildTools() {
 	for _, t := range tools {
 		a.AddTool(t)
 	}
-}
-
-func (a *Agent) BuildSystemPrompt() (systemPrompt string) {
-	systemPrompt = "You are a helpful assistant."
-	agentMarkdownPath := filepath.Join(a.Config.GetWorkspace(), "AGENTS.md")
-	data, err := os.ReadFile(agentMarkdownPath)
-	if err != nil {
-		return
-	}
-	systemPrompt = string(data)
-	return
 }

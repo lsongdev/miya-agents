@@ -31,6 +31,7 @@ func NewResponseWriter(w http.ResponseWriter) *ResponseWriter {
 func (s *ResponseWriter) Send(event Event) {
 	data, _ := json.Marshal(event)
 	fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", event.Type, data)
+	println("Sent event:", string(data))
 	if s.flusher != nil {
 		s.flusher.Flush()
 	}
@@ -51,7 +52,7 @@ func (s *ResponseWriter) SendMessageStart(id, typ, role, model string) {
 func (s *ResponseWriter) SendContentBlockStart(index int, blockType string) {
 	s.Send(Event{
 		Type:         "content_block_start",
-		Index:        index,
+		Index:        &index,
 		ContentBlock: &ContentBlock{Type: blockType},
 	})
 }
@@ -60,7 +61,7 @@ func (s *ResponseWriter) SendContentBlockDelta(index int, delta any) {
 	deltaBytes, _ := json.Marshal(delta)
 	s.Send(Event{
 		Type:  "content_block_delta",
-		Index: index,
+		Index: &index,
 		Delta: deltaBytes,
 	})
 }
@@ -68,7 +69,7 @@ func (s *ResponseWriter) SendContentBlockDelta(index int, delta any) {
 func (s *ResponseWriter) SendContentBlockStop(index int) {
 	s.Send(Event{
 		Type:  "content_block_stop",
-		Index: index,
+		Index: &index,
 	})
 }
 

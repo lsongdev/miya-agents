@@ -9,8 +9,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/lsongdev/openai-go/config"
-	"github.com/lsongdev/openai-go/openai"
+	"github.com/lsongdev/miya-agents/config"
+	"github.com/lsongdev/miya-agents/openai"
 )
 
 type Session struct {

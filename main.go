@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -12,13 +11,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lsongdev/openai-go/agent"
-	"github.com/lsongdev/openai-go/config"
-	"github.com/lsongdev/openai-go/mcp"
-	"github.com/lsongdev/openai-go/openai"
-	"github.com/lsongdev/openai-go/router"
-	"github.com/lsongdev/openai-go/session"
-	"github.com/lsongdev/openai-go/tools"
+	"github.com/lsongdev/miya-agents/acp"
+	"github.com/lsongdev/miya-agents/agent"
+	"github.com/lsongdev/miya-agents/config"
+	"github.com/lsongdev/miya-agents/mcp"
+	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/router"
+	"github.com/lsongdev/miya-agents/session"
+	"github.com/lsongdev/miya-agents/tools"
 )
 
 // envVars is a custom flag.Value type for parsing multiple environment variables
@@ -55,6 +55,8 @@ func main() {
 		serveCommand()
 	case "mcp":
 		mcpCommand()
+	case "acp":
+		acpCommand()
 	case "skills":
 		skillsCommand()
 	case "agent":
@@ -70,6 +72,25 @@ func main() {
 	default:
 		fmt.Printf("Unknown command: %s\n\n", command)
 		printUsage()
+	}
+}
+
+func acpCommand() {
+	acpServeCommand()
+}
+
+func acpServeCommand() {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	agentManager := agent.NewAgentManager(cfg)
+	server := acp.NewServer(agentManager)
+	if err := server.Serve(); err != nil {
+		fmt.Fprintf(os.Stderr, "ACP server error: %v\n", err)
+		os.Exit(1)
 	}
 }
 
@@ -139,24 +160,21 @@ func runCommand(args []string) {
 	}
 
 	if sess == nil {
-		sess = session.New(agentName)
-	}
-
-	if len(sess.Messages) == 0 {
-		if prompt := ag.BuildSystemPrompt(); prompt != "" {
-			sess.Messages = append(sess.Messages, openai.SystemMessage(prompt))
-		}
+		sess = ag.NewSession()
 	}
 
 	output := &stdoutWriter{}
-	reader := bufio.NewReader(os.Stdin)
 	ctx := context.Background()
+	rl := New("> ")
 
 	fmt.Printf("miya REPL (agent: %s, session: %s) - type 'exit' or 'quit' to leave\n", agentName, sess.ID)
 	for {
-		fmt.Print("\n> ")
-		line, err := reader.ReadString('\n')
+		line, err := rl.Readline()
 		if err != nil {
+			if err == ErrInterrupted {
+				fmt.Println()
+				return
+			}
 			fmt.Println()
 			return
 		}
@@ -174,14 +192,19 @@ func runCommand(args []string) {
 	}
 }
 
-type stdoutWriter struct{}
+type stdoutWriter struct {
+	md *MarkdownRenderer
+}
 
 func (w *stdoutWriter) Write(s string, done bool) error {
-	if done {
-		fmt.Println()
-		return nil
+	if w.md == nil {
+		w.md = NewMarkdownRenderer(os.Stdout)
 	}
-	fmt.Print(s)
+	w.md.Write(s)
+	if done {
+		w.md.Flush()
+		fmt.Println()
+	}
 	return nil
 }
 
@@ -312,6 +335,9 @@ func printUsage() {
 	fmt.Println("  miya mcp add memory --command npx --args \"-y @modelcontextprotocol/server-memory\"")
 	fmt.Println("  miya mcp list")
 	fmt.Println("  miya mcp remove filesystem")
+	fmt.Println()
+	fmt.Println("ACP Commands:")
+	fmt.Println("  miya acp          Start ACP server (JSON-RPC over stdio)")
 	fmt.Println()
 	fmt.Println("Skills Commands:")
 	fmt.Println("  miya skills list    List all available skills")

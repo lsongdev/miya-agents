@@ -189,11 +189,11 @@ func TestCreateMessageStream(t *testing.T) {
 		fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", msgStart)
 
 		deltaData, _ := json.Marshal(Delta{Type: "text_delta", Text: "Hel"})
-		cbDelta, _ := json.Marshal(Event{Type: "content_block_delta", Index: 0, Delta: deltaData})
+		cbDelta, _ := json.Marshal(Event{Type: "content_block_delta", Index: new(int), Delta: deltaData})
 		fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", cbDelta)
 
 		deltaData2, _ := json.Marshal(Delta{Type: "text_delta", Text: "lo"})
-		cbDelta2, _ := json.Marshal(Event{Type: "content_block_delta", Index: 0, Delta: deltaData2})
+		cbDelta2, _ := json.Marshal(Event{Type: "content_block_delta", Index: new(int), Delta: deltaData2})
 		fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", cbDelta2)
 
 		msgDeltaData, _ := json.Marshal(Delta{StopReason: "end_turn"})

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/lsongdev/openai-go/mcp"
-	"github.com/lsongdev/openai-go/openai"
+	"github.com/lsongdev/miya-agents/mcp"
+	"github.com/lsongdev/miya-agents/openai"
 )
 
 // mcpServer represents a registered MCP server.

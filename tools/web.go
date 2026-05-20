@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/lsongdev/openai-go/openai"
+	"github.com/lsongdev/miya-agents/openai"
 )
 
 const (

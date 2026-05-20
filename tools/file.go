@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lsongdev/openai-go/openai"
+	"github.com/lsongdev/miya-agents/openai"
 )
 
 const readFileDefaultLimit = 100

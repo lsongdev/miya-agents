@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lsongdev/openai-go/mcp"
+	"github.com/lsongdev/miya-agents/mcp"
 )
 
 // Config is the root configuration structure.

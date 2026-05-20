@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/lsongdev/openai-go/openai"
+	"github.com/lsongdev/miya-agents/openai"
 )
 
 // ToRequest converts an OpenAI chat completion request to Anthropic messages format.

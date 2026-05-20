@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lsongdev/openai-go/anthropic"
-	"github.com/lsongdev/openai-go/openai"
+	"github.com/lsongdev/miya-agents/anthropic"
+	"github.com/lsongdev/miya-agents/openai"
 )
 
 func TestSmoke_Models(t *testing.T) {
@@ -174,7 +174,7 @@ func TestSmoke_ChatCompletions_Anthropic_Stream(t *testing.T) {
 		fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", msgStart)
 
 		deltaData, _ := json.Marshal(anthropic.Delta{Type: "text_delta", Text: "Hello"})
-		cbDelta, _ := json.Marshal(anthropic.Event{Type: "content_block_delta", Index: 0, Delta: deltaData})
+		cbDelta, _ := json.Marshal(anthropic.Event{Type: "content_block_delta", Index: new(int), Delta: deltaData})
 		fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", cbDelta)
 
 		msgDeltaData, _ := json.Marshal(anthropic.Delta{StopReason: "end_turn"})
@@ -466,11 +466,11 @@ func TestSmoke_AnthropicClient_Stream(t *testing.T) {
 		fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", msgStart)
 
 		deltaData, _ := json.Marshal(anthropic.Delta{Type: "text_delta", Text: "Hel"})
-		cbDelta, _ := json.Marshal(anthropic.Event{Type: "content_block_delta", Index: 0, Delta: deltaData})
+		cbDelta, _ := json.Marshal(anthropic.Event{Type: "content_block_delta", Index: new(int), Delta: deltaData})
 		fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", cbDelta)
 
 		deltaData2, _ := json.Marshal(anthropic.Delta{Type: "text_delta", Text: "lo"})
-		cbDelta2, _ := json.Marshal(anthropic.Event{Type: "content_block_delta", Index: 0, Delta: deltaData2})
+		cbDelta2, _ := json.Marshal(anthropic.Event{Type: "content_block_delta", Index: new(int), Delta: deltaData2})
 		fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", cbDelta2)
 
 		msgDeltaData, _ := json.Marshal(anthropic.Delta{StopReason: "end_turn"})
@@ -537,7 +537,7 @@ func TestSmoke_Messages_Anthropic_Stream(t *testing.T) {
 		fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", msgStart)
 
 		deltaData, _ := json.Marshal(anthropic.Delta{Type: "text_delta", Text: "Hi"})
-		cbDelta, _ := json.Marshal(anthropic.Event{Type: "content_block_delta", Index: 0, Delta: deltaData})
+		cbDelta, _ := json.Marshal(anthropic.Event{Type: "content_block_delta", Index: new(int), Delta: deltaData})
 		fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", cbDelta)
 
 		msgDeltaData, _ := json.Marshal(anthropic.Delta{StopReason: "end_turn"})

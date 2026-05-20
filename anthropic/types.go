@@ -107,7 +107,7 @@ type Response struct {
 // ContentBlock is a block of content in an Anthropic response.
 type ContentBlock struct {
 	Type     string `json:"type"` // "text", "thinking", "redacted_thinking", "tool_use"
-	Text     string `json:"text,omitempty"`
+	Text     string `json:"text"`
 	Thinking string `json:"thinking,omitempty"`
 }
 
@@ -126,7 +126,7 @@ type APIError struct {
 // Event is a single SSE event in an Anthropic streaming response.
 type Event struct {
 	Type         string          `json:"type"`
-	Index        int             `json:"index,omitempty"`
+	Index        *int            `json:"index,omitempty"`
 	Message      *MessageStart   `json:"message,omitempty"`
 	ContentBlock *ContentBlock   `json:"content_block,omitempty"`
 	Delta        json.RawMessage `json:"delta,omitempty"`

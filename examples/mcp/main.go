@@ -5,9 +5,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/lsongdev/openai-go/mcp"
-	"github.com/lsongdev/openai-go/openai"
-	"github.com/lsongdev/openai-go/tools"
+	"github.com/lsongdev/miya-agents/mcp"
+	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/tools"
 )
 
 func main() {

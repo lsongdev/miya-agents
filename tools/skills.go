@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lsongdev/openai-go/openai"
-	"github.com/lsongdev/openai-go/skills"
+	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/skills"
 )
 
 // SkillsTool provides access to skills.

@@ -1,20 +1,30 @@
 package agent
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 
-	"github.com/lsongdev/openai-go/config"
-	"github.com/lsongdev/openai-go/openai"
+	"github.com/lsongdev/miya-agents/acp"
+	"github.com/lsongdev/miya-agents/config"
+	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/session"
+	"github.com/lsongdev/miya-agents/tools"
 )
 
 type Manager struct {
-	config *config.Config
+	config   *config.Config
+	sessions map[string]*session.Session
+	mu       sync.RWMutex
 }
 
 func NewAgentManager(config *config.Config) *Manager {
-
 	return &Manager{
-		config: config,
+		config:   config,
+		sessions: make(map[string]*session.Session),
 	}
 }
 
@@ -37,11 +47,189 @@ func (m *Manager) UseAgent(name string) (a *Agent, err error) {
 		return
 	}
 	a = &Agent{
+		Name:      name,
 		LLM:       llm,
 		Config:    ac,
 		toolsMap:  make(map[string]openai.Tool),
 		toolsDefs: []openai.ToolDef{},
 	}
 	a.BuildTools()
+	a.AddTool(tools.NewSubagentTool(m))
 	return
+}
+
+type captureWriter struct {
+	sb strings.Builder
+}
+
+func (w *captureWriter) Write(s string, done bool) error {
+	w.sb.WriteString(s)
+	return nil
+}
+
+func (m *Manager) RunAgent(ctx context.Context, name, prompt string) (string, error) {
+	ag, err := m.UseAgent(name)
+	if err != nil {
+		return "", err
+	}
+
+	sess := ag.NewSession()
+	sess.AppendRequest(prompt)
+
+	writer := &captureWriter{}
+	if err := ag.RunAgentLoop(ctx, sess, writer); err != nil {
+		return "", fmt.Errorf("agent '%s' failed: %v", name, err)
+	}
+
+	return writer.sb.String(), nil
+}
+
+// acp.Handler implementation
+
+func (m *Manager) Initialize(ctx context.Context, req *acp.InitializeRequest) (*acp.InitializeResponse, error) {
+	caps := acp.DefaultAgentCapabilities()
+	caps.LoadSession = true
+	caps.SessionCapabilities = acp.SessionCapabilities{
+		List:   &acp.SessionListCapabilities{},
+		Resume: &acp.SessionResumeCapabilities{},
+		Close:  &acp.SessionCloseCapabilities{},
+		Delete: &acp.SessionDeleteCapabilities{},
+	}
+
+	return &acp.InitializeResponse{
+		ProtocolVersion:   req.ProtocolVersion,
+		AgentCapabilities: caps,
+		AgentInfo: &acp.Implementation{
+			Name:    "miya",
+			Version: "0.1.0",
+		},
+	}, nil
+}
+
+func (m *Manager) Authenticate(ctx context.Context, req *acp.AuthenticateRequest) (*acp.AuthenticateResponse, error) {
+	return &acp.AuthenticateResponse{}, nil
+}
+
+func (m *Manager) NewSession(ctx context.Context, req *acp.NewSessionRequest, sender acp.SessionUpdateSender) (*acp.NewSessionResponse, error) {
+	agentName := "default"
+	if _, ok := m.config.Agents["default"]; !ok {
+		for name := range m.config.Agents {
+			agentName = name
+			break
+		}
+	}
+
+	sess := session.New(agentName)
+	if err := sess.Save(); err != nil {
+		return nil, fmt.Errorf("save session: %w", err)
+	}
+
+	m.mu.Lock()
+	m.sessions[sess.ID] = sess
+	m.mu.Unlock()
+
+	return &acp.NewSessionResponse{
+		SessionID: acp.SessionID(sess.ID),
+	}, nil
+}
+
+func (m *Manager) Prompt(ctx context.Context, req *acp.PromptRequest, sender acp.SessionUpdateSender) (*acp.PromptResponse, error) {
+	sess, err := session.Load(string(req.SessionID))
+	if err != nil {
+		return nil, fmt.Errorf("load session: %w", err)
+	}
+
+	var textParts []string
+	for _, block := range req.Prompt {
+		if block.Text != "" {
+			textParts = append(textParts, block.Text)
+		}
+	}
+	prompt := strings.Join(textParts, "\n")
+	sess.AppendRequest(prompt)
+
+	ag, err := m.UseAgent(sess.AgentName)
+	if err != nil {
+		return nil, fmt.Errorf("use agent: %w", err)
+	}
+
+	writer := &acpWriter{sessionID: req.SessionID, sender: sender}
+	if err := ag.RunAgentLoop(ctx, sess, writer); err != nil {
+		return nil, fmt.Errorf("agent loop: %w", err)
+	}
+
+	return &acp.PromptResponse{StopReason: acp.StopEndTurn}, nil
+}
+
+type acpWriter struct {
+	sessionID acp.SessionID
+	sender    acp.SessionUpdateSender
+}
+
+func (w *acpWriter) Write(s string, done bool) error {
+	if s != "" {
+		return w.sender.Send(acp.SessionUpdate{
+			SessionUpdate: "agent_message_chunk",
+			Content:       acp.ContentBlock{Type: "text", Text: s},
+		})
+	}
+	if done {
+		return w.sender.Send(acp.SessionUpdate{
+			SessionUpdate: "usage_update",
+			Usage:         &acp.UsageUpdate{},
+		})
+	}
+	return nil
+}
+
+func (m *Manager) LoadSession(ctx context.Context, req *acp.LoadSessionRequest, sender acp.SessionUpdateSender) (*acp.LoadSessionResponse, error) {
+	if _, err := session.Load(string(req.SessionID)); err != nil {
+		return nil, fmt.Errorf("load session: %w", err)
+	}
+	return &acp.LoadSessionResponse{}, nil
+}
+
+func (m *Manager) ResumeSession(ctx context.Context, req *acp.ResumeSessionRequest) (*acp.ResumeSessionResponse, error) {
+	if _, err := session.Load(string(req.SessionID)); err != nil {
+		return nil, fmt.Errorf("load session: %w", err)
+	}
+	return &acp.ResumeSessionResponse{}, nil
+}
+
+func (m *Manager) CloseSession(ctx context.Context, req *acp.CloseSessionRequest) (*acp.CloseSessionResponse, error) {
+	return &acp.CloseSessionResponse{}, nil
+}
+
+func (m *Manager) DeleteSession(ctx context.Context, req *acp.DeleteSessionRequest) (*acp.DeleteSessionResponse, error) {
+	p := filepath.Join(config.ConfigPath, "sessions", string(req.SessionID)+".json")
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("delete session: %w", err)
+	}
+	return &acp.DeleteSessionResponse{}, nil
+}
+
+func (m *Manager) ListSessions(ctx context.Context, req *acp.ListSessionsRequest) (*acp.ListSessionsResponse, error) {
+	sessions, err := session.List()
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	infos := make([]acp.SessionInfo, 0, len(sessions))
+	for _, s := range sessions {
+		infos = append(infos, acp.SessionInfo{
+			SessionID: acp.SessionID(s.ID),
+		})
+	}
+	return &acp.ListSessionsResponse{Sessions: infos}, nil
+}
+
+func (m *Manager) SetSessionMode(ctx context.Context, req *acp.SetSessionModeRequest) (*acp.SetSessionModeResponse, error) {
+	return &acp.SetSessionModeResponse{}, nil
+}
+
+func (m *Manager) SetSessionConfigOption(ctx context.Context, req *acp.SetSessionConfigOptionRequest) (*acp.SetSessionConfigOptionResponse, error) {
+	return &acp.SetSessionConfigOptionResponse{}, nil
+}
+
+func (m *Manager) Logout(ctx context.Context, req *acp.LogoutRequest) (*acp.LogoutResponse, error) {
+	return &acp.LogoutResponse{}, nil
 }
