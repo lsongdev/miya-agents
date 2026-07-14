@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -16,7 +17,7 @@ type NotificationHandler func(method string, params json.RawMessage)
 // Client is an ACP client that communicates with an ACP agent over stdio.
 type Client struct {
 	stdin           io.WriteCloser
-	stdout          *bufio.Scanner
+	stdout          *bufio.Reader
 	mu              sync.Mutex
 	id              atomic.Int64
 	onNotification  NotificationHandler
@@ -28,6 +29,7 @@ func (c *Client) OnNotification(handler NotificationHandler) {
 }
 
 // DialStdio launches an ACP agent subprocess and returns a Client connected to it.
+// Agent stderr is forwarded to the parent process's stderr for visibility.
 func DialStdio(command string, args ...string) (*Client, error) {
 	cmd := exec.Command(command, args...)
 	stdin, err := cmd.StdinPipe()
@@ -38,7 +40,7 @@ func DialStdio(command string, args ...string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("acp: stdout pipe: %w", err)
 	}
-	cmd.Stderr = nil // stderr is for agent logs
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("acp: start: %w", err)
@@ -50,8 +52,11 @@ func DialStdio(command string, args ...string) (*Client, error) {
 // NewClient creates an ACP client from the given read/writer.
 func NewClient(stdin io.WriteCloser, stdout io.Reader) *Client {
 	return &Client{
-		stdin:  stdin,
-		stdout: bufio.NewScanner(stdout),
+		stdin: stdin,
+		// bufio.Reader.ReadBytes('\n') has no line-size limit, so replayed
+		// session/update notifications with large tool outputs won't close
+		// the connection the way bufio.Scanner's default 64KB cap did.
+		stdout: bufio.NewReaderSize(stdout, 64*1024),
 	}
 }
 
@@ -78,9 +83,25 @@ func (c *Client) sendRecv(method string, params, result any) error {
 	}
 
 	// Read response lines until we find one matching our ID
-	for c.stdout.Scan() {
-		line := c.stdout.Bytes()
+	for {
+		line, readErr := c.stdout.ReadBytes('\n')
 		if len(line) == 0 {
+			if readErr != nil {
+				return fmt.Errorf("acp: connection closed")
+			}
+			continue
+		}
+		// Trim trailing newline; still process the frame even if EOF followed.
+		if line[len(line)-1] == '\n' {
+			line = line[:len(line)-1]
+		}
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		if len(line) == 0 {
+			if readErr != nil {
+				return fmt.Errorf("acp: connection closed")
+			}
 			continue
 		}
 
@@ -91,6 +112,9 @@ func (c *Client) sendRecv(method string, params, result any) error {
 			Error  *jsonrpcError    `json:"error,omitempty"`
 		}
 		if err := json.Unmarshal(line, &raw); err != nil {
+			if readErr != nil {
+				return fmt.Errorf("acp: connection closed")
+			}
 			continue
 		}
 
@@ -106,6 +130,9 @@ func (c *Client) sendRecv(method string, params, result any) error {
 					c.onNotification(notifRaw.Method, notifRaw.Params)
 				}
 			}
+			if readErr != nil {
+				return fmt.Errorf("acp: connection closed")
+			}
 			continue
 		}
 
@@ -117,10 +144,16 @@ func (c *Client) sendRecv(method string, params, result any) error {
 		case int64:
 			respID = v
 		default:
+			if readErr != nil {
+				return fmt.Errorf("acp: connection closed")
+			}
 			continue
 		}
 
 		if respID != id {
+			if readErr != nil {
+				return fmt.Errorf("acp: connection closed")
+			}
 			continue
 		}
 
@@ -135,8 +168,6 @@ func (c *Client) sendRecv(method string, params, result any) error {
 		}
 		return nil
 	}
-
-	return fmt.Errorf("acp: connection closed")
 }
 
 // SendNotification sends a JSON-RPC notification (no response expected).
@@ -290,22 +321,28 @@ func (c *Client) ReceiveSessionUpdates(ctx any) <-chan SessionUpdate {
 	ch := make(chan SessionUpdate, 64)
 	go func() {
 		defer close(ch)
-		for c.stdout.Scan() {
-			line := c.stdout.Bytes()
-			if len(line) == 0 {
-				continue
+		for {
+			line, err := c.stdout.ReadBytes('\n')
+			if len(line) > 0 {
+				if line[len(line)-1] == '\n' {
+					line = line[:len(line)-1]
+				}
+				if len(line) > 0 && line[len(line)-1] == '\r' {
+					line = line[:len(line)-1]
+				}
+				if len(line) > 0 {
+					var raw struct {
+						Method string              `json:"method"`
+						Params SessionNotification `json:"params"`
+					}
+					if json.Unmarshal(line, &raw) == nil && raw.Method == "session/update" {
+						ch <- raw.Params.Update
+					}
+				}
 			}
-			var raw struct {
-				Method string              `json:"method"`
-				Params SessionNotification `json:"params"`
+			if err != nil {
+				return
 			}
-			if err := json.Unmarshal(line, &raw); err != nil {
-				continue
-			}
-			if raw.Method != "session/update" {
-				continue
-			}
-			ch <- raw.Params.Update
 		}
 	}()
 	return ch
