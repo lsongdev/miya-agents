@@ -18,7 +18,7 @@ type McpServer struct {
 }
 
 func NewMcpServer(config *mcp.McpServerConfig) (server *McpServer, err error) {
-	client, err := mcp.NewStdioClient(config)
+	client, err := mcp.NewConfiguredClient(config)
 	if err != nil {
 		err = fmt.Errorf("failed to create client: %w", err)
 		return

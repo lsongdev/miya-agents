@@ -2,10 +2,16 @@
 package mcp
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"github.com/lsongdev/jsonrpc-go/jsonrpc"
@@ -120,9 +126,12 @@ func NewClient(transport common.Transport) *Client {
 }
 
 type McpServerConfig struct {
-	Command string            `json:"command"`
-	Args    []string          `json:"args"`
+	Type    string            `json:"type,omitempty"`
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // NewStdioClient creates a new MCP client that communicates via stdio.
@@ -149,6 +158,236 @@ func NewStdioClient(server *McpServerConfig) (*Client, error) {
 
 	transport := transports.NewStdioTransport(stdin, stdout)
 	return NewClient(transport), nil
+}
+
+func NewHTTPClient(server *McpServerConfig) (*Client, error) {
+	if server.URL == "" {
+		return nil, fmt.Errorf("mcp http: url is required")
+	}
+	transport := transports.NewHTTPTransport(server.URL, &transports.HTTPOptions{
+		Headers: server.Headers,
+	})
+	return NewClient(transport), nil
+}
+
+func NewSSEClient(server *McpServerConfig) (*Client, error) {
+	if server.URL == "" {
+		return nil, fmt.Errorf("mcp sse: url is required")
+	}
+	transport, err := NewSSETransport(server.URL, server.Headers)
+	if err != nil {
+		return nil, err
+	}
+	return NewClient(transport), nil
+}
+
+func NewConfiguredClient(server *McpServerConfig) (*Client, error) {
+	switch strings.ToLower(server.Type) {
+	case "", "stdio":
+		if server.URL != "" && server.Command == "" {
+			return NewSSEClient(server)
+		}
+		return NewStdioClient(server)
+	case "http":
+		return NewHTTPClient(server)
+	case "sse":
+		return NewSSEClient(server)
+	default:
+		return nil, fmt.Errorf("unsupported mcp transport type: %s", server.Type)
+	}
+}
+
+type SSETransport struct {
+	sseURL      string
+	postURL     string
+	headers     map[string]string
+	client      *http.Client
+	ctx         context.Context
+	cancel      context.CancelFunc
+	resp        *http.Response
+	events      chan []byte
+	sendMu      sync.Mutex
+	initialized bool
+}
+
+func NewSSETransport(sseURL string, headers map[string]string) (*SSETransport, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t := &SSETransport{
+		sseURL:  sseURL,
+		headers: headers,
+		client:  http.DefaultClient,
+		ctx:     ctx,
+		cancel:  cancel,
+		events:  make(chan []byte, 32),
+	}
+	if err := t.connect(); err != nil {
+		cancel()
+		return nil, err
+	}
+	return t, nil
+}
+
+func (t *SSETransport) connect() error {
+	req, err := http.NewRequestWithContext(t.ctx, http.MethodGet, t.sseURL, nil)
+	if err != nil {
+		return fmt.Errorf("mcp sse: create request: %w", err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	for k, v := range t.headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("mcp sse: connect: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return fmt.Errorf("mcp sse: unexpected status %s: %s", resp.Status, string(body))
+	}
+	t.resp = resp
+
+	endpoint, err := readSSEEndpoint(resp.Body)
+	if err != nil {
+		resp.Body.Close()
+		return err
+	}
+	t.postURL, err = resolveSSEEndpoint(t.sseURL, endpoint)
+	if err != nil {
+		resp.Body.Close()
+		return err
+	}
+
+	go t.readEvents(resp.Body)
+	return nil
+}
+
+func (t *SSETransport) Send(msg any) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("mcp sse: marshal message: %w", err)
+	}
+
+	t.sendMu.Lock()
+	defer t.sendMu.Unlock()
+
+	req, err := http.NewRequestWithContext(t.ctx, http.MethodPost, t.postURL, bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("mcp sse: create post: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range t.headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("mcp sse: post message: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("mcp sse: post status %s: %s", resp.Status, string(body))
+	}
+	return nil
+}
+
+func (t *SSETransport) Recv() ([]byte, error) {
+	select {
+	case data, ok := <-t.events:
+		if !ok {
+			return nil, fmt.Errorf("mcp sse: stream closed")
+		}
+		return data, nil
+	case <-t.ctx.Done():
+		return nil, t.ctx.Err()
+	}
+}
+
+func (t *SSETransport) Close() error {
+	t.cancel()
+	if t.resp != nil {
+		return t.resp.Body.Close()
+	}
+	return nil
+}
+
+func (t *SSETransport) readEvents(r io.Reader) {
+	defer close(t.events)
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	var event string
+	var data []string
+	flush := func() bool {
+		if len(data) == 0 {
+			event = ""
+			return true
+		}
+		if event == "" || event == "message" {
+			select {
+			case t.events <- []byte(strings.Join(data, "\n")):
+			case <-t.ctx.Done():
+				return false
+			}
+		}
+		event = ""
+		data = nil
+		return true
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			if !flush() {
+				return
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		} else if strings.HasPrefix(line, "data:") {
+			data = append(data, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+}
+
+func readSSEEndpoint(r io.Reader) (string, error) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	var event string
+	var data []string
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			if event == "endpoint" && len(data) > 0 {
+				return strings.Join(data, "\n"), nil
+			}
+			event = ""
+			data = nil
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		} else if strings.HasPrefix(line, "data:") {
+			data = append(data, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("mcp sse: read endpoint: %w", err)
+	}
+	return "", fmt.Errorf("mcp sse: endpoint event not received")
+}
+
+func resolveSSEEndpoint(baseURL, endpoint string) (string, error) {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("mcp sse: parse base url: %w", err)
+	}
+	ref, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("mcp sse: parse endpoint: %w", err)
+	}
+	return base.ResolveReference(ref).String(), nil
 }
 
 // Initialize initializes the MCP connection.

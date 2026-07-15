@@ -32,11 +32,11 @@ type FileSystemCapabilities struct {
 }
 
 type AgentCapabilities struct {
-	LoadSession        bool                 `json:"loadSession"`
-	PromptCapabilities PromptCapabilities   `json:"promptCapabilities"`
-	McpCapabilities    McpCapabilities      `json:"mcpCapabilities"`
-	SessionCapabilities SessionCapabilities `json:"sessionCapabilities"`
-	Auth               AgentAuthCapabilities `json:"auth"`
+	LoadSession         bool                  `json:"loadSession"`
+	PromptCapabilities  PromptCapabilities    `json:"promptCapabilities"`
+	McpCapabilities     McpCapabilities       `json:"mcpCapabilities"`
+	SessionCapabilities SessionCapabilities   `json:"sessionCapabilities"`
+	Auth                AgentAuthCapabilities `json:"auth"`
 }
 
 type PromptCapabilities struct {
@@ -195,25 +195,25 @@ type ContentBlock struct {
 type ToolKind string
 
 const (
-	ToolKindRead        ToolKind = "read"
-	ToolKindEdit        ToolKind = "edit"
-	ToolKindDelete      ToolKind = "delete"
-	ToolKindMove        ToolKind = "move"
-	ToolKindSearch      ToolKind = "search"
-	ToolKindExecute     ToolKind = "execute"
-	ToolKindThink       ToolKind = "think"
-	ToolKindFetch       ToolKind = "fetch"
-	ToolKindSwitchMode  ToolKind = "switch_mode"
-	ToolKindOther       ToolKind = "other"
+	ToolKindRead       ToolKind = "read"
+	ToolKindEdit       ToolKind = "edit"
+	ToolKindDelete     ToolKind = "delete"
+	ToolKindMove       ToolKind = "move"
+	ToolKindSearch     ToolKind = "search"
+	ToolKindExecute    ToolKind = "execute"
+	ToolKindThink      ToolKind = "think"
+	ToolKindFetch      ToolKind = "fetch"
+	ToolKindSwitchMode ToolKind = "switch_mode"
+	ToolKindOther      ToolKind = "other"
 )
 
 type ToolCallStatus string
 
 const (
-	ToolCallPending     ToolCallStatus = "pending"
-	ToolCallInProgress  ToolCallStatus = "in_progress"
-	ToolCallCompleted   ToolCallStatus = "completed"
-	ToolCallFailed      ToolCallStatus = "failed"
+	ToolCallPending    ToolCallStatus = "pending"
+	ToolCallInProgress ToolCallStatus = "in_progress"
+	ToolCallCompleted  ToolCallStatus = "completed"
+	ToolCallFailed     ToolCallStatus = "failed"
 )
 
 type ToolCallLocation struct {
@@ -231,25 +231,25 @@ type ToolCallContent struct {
 }
 
 type ToolCall struct {
-	ToolCallID ToolCallID          `json:"toolCallId"`
-	Title      string              `json:"title"`
-	Kind       ToolKind            `json:"kind"`
-	Status     ToolCallStatus      `json:"status"`
-	Content    []ToolCallContent   `json:"content"`
-	Locations  []ToolCallLocation  `json:"locations"`
-	RawInput   json.RawMessage     `json:"rawInput"`
-	RawOutput  json.RawMessage     `json:"rawOutput"`
+	ToolCallID ToolCallID         `json:"toolCallId"`
+	Title      string             `json:"title"`
+	Kind       ToolKind           `json:"kind"`
+	Status     ToolCallStatus     `json:"status"`
+	Content    []ToolCallContent  `json:"content"`
+	Locations  []ToolCallLocation `json:"locations"`
+	RawInput   json.RawMessage    `json:"rawInput"`
+	RawOutput  json.RawMessage    `json:"rawOutput"`
 }
 
 type ToolCallUpdate struct {
-	ToolCallID ToolCallID          `json:"toolCallId"`
-	Title      *string             `json:"title,omitempty"`
-	Kind       *ToolKind           `json:"kind,omitempty"`
-	Status     *ToolCallStatus     `json:"status,omitempty"`
-	Content    []ToolCallContent   `json:"content,omitempty"`
-	Locations  []ToolCallLocation  `json:"locations,omitempty"`
-	RawInput   json.RawMessage     `json:"rawInput,omitempty"`
-	RawOutput  json.RawMessage     `json:"rawOutput,omitempty"`
+	ToolCallID ToolCallID         `json:"toolCallId"`
+	Title      *string            `json:"title,omitempty"`
+	Kind       *ToolKind          `json:"kind,omitempty"`
+	Status     *ToolCallStatus    `json:"status,omitempty"`
+	Content    []ToolCallContent  `json:"content,omitempty"`
+	Locations  []ToolCallLocation `json:"locations,omitempty"`
+	RawInput   json.RawMessage    `json:"rawInput,omitempty"`
+	RawOutput  json.RawMessage    `json:"rawOutput,omitempty"`
 }
 
 // === Permission Types ===
@@ -266,11 +266,11 @@ const (
 type PermissionOption struct {
 	OptionID PermissionOptionID   `json:"optionId"`
 	Name     string               `json:"name"`
-	Kind     PermissionOptionKind  `json:"kind"`
+	Kind     PermissionOptionKind `json:"kind"`
 }
 
 type RequestPermissionOutcome struct {
-	Outcome  string            `json:"outcome"`
+	Outcome  string             `json:"outcome"`
 	OptionID PermissionOptionID `json:"optionId,omitempty"`
 }
 
@@ -279,11 +279,11 @@ type RequestPermissionOutcome struct {
 type StopReason string
 
 const (
-	StopEndTurn        StopReason = "end_turn"
-	StopMaxTokens      StopReason = "max_tokens"
-	StopMaxTurnReqs    StopReason = "max_turn_requests"
-	StopRefusal        StopReason = "refusal"
-	StopCancelled      StopReason = "cancelled"
+	StopEndTurn     StopReason = "end_turn"
+	StopMaxTokens   StopReason = "max_tokens"
+	StopMaxTurnReqs StopReason = "max_turn_requests"
+	StopRefusal     StopReason = "refusal"
+	StopCancelled   StopReason = "cancelled"
 )
 
 // === Terminal Types ===
@@ -302,8 +302,8 @@ type SessionConfigSelectOption struct {
 }
 
 type SessionConfigSelectGroup struct {
-	Group   SessionConfigGroupID       `json:"group"`
-	Name    string                     `json:"name"`
+	Group   SessionConfigGroupID        `json:"group"`
+	Name    string                      `json:"name"`
 	Options []SessionConfigSelectOption `json:"options"`
 }
 
@@ -322,19 +322,19 @@ type SessionMode struct {
 }
 
 type SessionModeState struct {
-	CurrentModeID  SessionModeID  `json:"currentModeId"`
-	AvailableModes []SessionMode  `json:"availableModes"`
+	CurrentModeID  SessionModeID `json:"currentModeId"`
+	AvailableModes []SessionMode `json:"availableModes"`
 }
 
 // === Session Info ===
 
 type SessionInfo struct {
-	SessionID            SessionID  `json:"sessionId"`
-	Cwd                  string     `json:"cwd"`
-	Title                *string    `json:"title,omitempty"`
-	UpdatedAt            *string    `json:"updatedAt,omitempty"`
+	SessionID             SessionID `json:"sessionId"`
+	Cwd                   string    `json:"cwd"`
+	Title                 *string   `json:"title,omitempty"`
+	UpdatedAt             *string   `json:"updatedAt,omitempty"`
 	AdditionalDirectories []string  `json:"additionalDirectories"`
-	Meta                 Meta       `json:"_meta,omitempty"`
+	Meta                  Meta      `json:"_meta,omitempty"`
 }
 
 // === Session Update Variants ===
@@ -356,9 +356,9 @@ const (
 )
 
 type PlanEntry struct {
-	Content  string             `json:"content"`
-	Status   PlanEntryStatus    `json:"status"`
-	Priority PlanEntryPriority  `json:"priority"`
+	Content  string            `json:"content"`
+	Status   PlanEntryStatus   `json:"status"`
+	Priority PlanEntryPriority `json:"priority"`
 }
 
 type Plan struct {
@@ -398,9 +398,9 @@ type Cost struct {
 }
 
 type UsageUpdate struct {
-	Size uint64  `json:"size"`
-	Used uint64  `json:"used"`
-	Cost *Cost   `json:"cost,omitempty"`
+	Size uint64 `json:"size"`
+	Used uint64 `json:"used"`
+	Cost *Cost  `json:"cost,omitempty"`
 }
 
 type SessionUpdate struct {
@@ -443,18 +443,18 @@ type SessionUpdate struct {
 // === JSON-RPC Request/Response Types ===
 
 type InitializeRequest struct {
-	ProtocolVersion    ProtocolVersion     `json:"protocolVersion"`
-	ClientCapabilities ClientCapabilities  `json:"clientCapabilities"`
-	ClientInfo         *Implementation     `json:"clientInfo,omitempty"`
-	Meta               Meta                `json:"_meta,omitempty"`
+	ProtocolVersion    ProtocolVersion    `json:"protocolVersion"`
+	ClientCapabilities ClientCapabilities `json:"clientCapabilities"`
+	ClientInfo         *Implementation    `json:"clientInfo,omitempty"`
+	Meta               Meta               `json:"_meta,omitempty"`
 }
 
 type InitializeResponse struct {
-	ProtocolVersion    ProtocolVersion     `json:"protocolVersion"`
-	AgentCapabilities  AgentCapabilities   `json:"agentCapabilities"`
-	AuthMethods        []AuthMethod        `json:"authMethods"`
-	AgentInfo          *Implementation     `json:"agentInfo,omitempty"`
-	Meta               Meta                `json:"_meta,omitempty"`
+	ProtocolVersion   ProtocolVersion   `json:"protocolVersion"`
+	AgentCapabilities AgentCapabilities `json:"agentCapabilities"`
+	AuthMethods       []AuthMethod      `json:"authMethods"`
+	AgentInfo         *Implementation   `json:"agentInfo,omitempty"`
+	Meta              Meta              `json:"_meta,omitempty"`
 }
 
 type AuthenticateRequest struct {
@@ -467,23 +467,23 @@ type AuthenticateResponse struct {
 }
 
 type NewSessionRequest struct {
-	Cwd                  string        `json:"cwd"`
-	McpServers           []McpServer `json:"mcpServers"`
-	AdditionalDirectories []string      `json:"additionalDirectories,omitempty"`
-	Meta                 Meta          `json:"_meta,omitempty"`
+	Cwd                   string      `json:"cwd"`
+	McpServers            []McpServer `json:"mcpServers"`
+	AdditionalDirectories []string    `json:"additionalDirectories,omitempty"`
+	Meta                  Meta        `json:"_meta,omitempty"`
 }
 
 type NewSessionResponse struct {
-	SessionID    SessionID             `json:"sessionId"`
+	SessionID     SessionID             `json:"sessionId"`
 	ConfigOptions []SessionConfigOption `json:"configOptions,omitempty"`
-	Modes        *SessionModeState     `json:"modes,omitempty"`
-	Meta         Meta                  `json:"_meta,omitempty"`
+	Modes         *SessionModeState     `json:"modes,omitempty"`
+	Meta          Meta                  `json:"_meta,omitempty"`
 }
 
 type PromptRequest struct {
-	SessionID SessionID     `json:"sessionId"`
+	SessionID SessionID      `json:"sessionId"`
 	Prompt    []ContentBlock `json:"prompt"`
-	Meta      Meta          `json:"_meta,omitempty"`
+	Meta      Meta           `json:"_meta,omitempty"`
 }
 
 type PromptResponse struct {
@@ -492,11 +492,11 @@ type PromptResponse struct {
 }
 
 type LoadSessionRequest struct {
-	SessionID            SessionID     `json:"sessionId"`
-	Cwd                  string        `json:"cwd"`
-	McpServers           []McpServer `json:"mcpServers"`
-	AdditionalDirectories []string      `json:"additionalDirectories,omitempty"`
-	Meta                 Meta          `json:"_meta,omitempty"`
+	SessionID             SessionID   `json:"sessionId"`
+	Cwd                   string      `json:"cwd"`
+	McpServers            []McpServer `json:"mcpServers"`
+	AdditionalDirectories []string    `json:"additionalDirectories,omitempty"`
+	Meta                  Meta        `json:"_meta,omitempty"`
 }
 
 type LoadSessionResponse struct {
@@ -506,11 +506,11 @@ type LoadSessionResponse struct {
 }
 
 type ResumeSessionRequest struct {
-	SessionID            SessionID     `json:"sessionId"`
-	Cwd                  string        `json:"cwd"`
-	McpServers           []McpServer `json:"mcpServers"`
-	AdditionalDirectories []string      `json:"additionalDirectories,omitempty"`
-	Meta                 Meta          `json:"_meta,omitempty"`
+	SessionID             SessionID   `json:"sessionId"`
+	Cwd                   string      `json:"cwd"`
+	McpServers            []McpServer `json:"mcpServers"`
+	AdditionalDirectories []string    `json:"additionalDirectories,omitempty"`
+	Meta                  Meta        `json:"_meta,omitempty"`
 }
 
 type ResumeSessionResponse struct {
@@ -550,9 +550,9 @@ type ListSessionsResponse struct {
 }
 
 type SetSessionModeRequest struct {
-	SessionID SessionID      `json:"sessionId"`
-	ModeID    SessionModeID  `json:"modeId"`
-	Meta      Meta           `json:"_meta,omitempty"`
+	SessionID SessionID     `json:"sessionId"`
+	ModeID    SessionModeID `json:"modeId"`
+	Meta      Meta          `json:"_meta,omitempty"`
 }
 
 type SetSessionModeResponse struct {
@@ -560,10 +560,10 @@ type SetSessionModeResponse struct {
 }
 
 type SetSessionConfigOptionRequest struct {
-	SessionID SessionID           `json:"sessionId"`
-	ConfigID  SessionConfigID     `json:"configId"`
+	SessionID SessionID            `json:"sessionId"`
+	ConfigID  SessionConfigID      `json:"configId"`
 	Value     SessionConfigValueID `json:"value"`
-	Meta      Meta                `json:"_meta,omitempty"`
+	Meta      Meta                 `json:"_meta,omitempty"`
 }
 
 type SetSessionConfigOptionResponse struct {
@@ -693,13 +693,13 @@ type SessionNotification struct {
 // === Error Codes ===
 
 const (
-	ErrParse                = -32700
-	ErrInvalidRequest       = -32600
-	ErrMethodNotFound       = -32601
-	ErrInvalidParams        = -32602
-	ErrInternal             = -32603
+	ErrParse                  = -32700
+	ErrInvalidRequest         = -32600
+	ErrMethodNotFound         = -32601
+	ErrInvalidParams          = -32602
+	ErrInternal               = -32603
 	ErrAuthenticationRequired = -32000
-	ErrResourceNotFound     = -32002
+	ErrResourceNotFound       = -32002
 )
 
 // === Default Values ===
@@ -723,8 +723,8 @@ func DefaultAgentCapabilities() AgentCapabilities {
 			EmbeddedContext: false,
 		},
 		McpCapabilities: McpCapabilities{
-			HTTP: false,
-			SSE:  false,
+			HTTP: true,
+			SSE:  true,
 		},
 		SessionCapabilities: SessionCapabilities{},
 		Auth:                AgentAuthCapabilities{},

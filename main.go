@@ -411,16 +411,19 @@ func mcpCommand() {
 
 func mcpAddCommand(args []string) {
 	if len(args) < 1 {
-		fmt.Println("Usage: miya mcp add <name> --command <cmd> [--args <args>] [--env <KEY=VALUE>...]")
+		fmt.Println("Usage: miya mcp add <name> [--type stdio|http|sse] [--command <cmd>] [--url <url>] [--args <args>] [--env <KEY=VALUE>...] [--header <KEY=VALUE>...]")
 		fmt.Println()
 		fmt.Println("Options:")
-		fmt.Println("  --command <cmd>   The command to run the MCP server (required)")
+		fmt.Println("  --type <type>     Transport type: stdio, http, or sse (default: stdio)")
+		fmt.Println("  --command <cmd>   Command for stdio MCP servers")
+		fmt.Println("  --url <url>       URL for HTTP/SSE MCP servers")
 		fmt.Println("  --args <args>     Arguments for the command (space-separated)")
 		fmt.Println("  --env <KEY=VALUE> Environment variables (can be specified multiple times)")
+		fmt.Println("  --header <KEY=VALUE> HTTP headers for HTTP/SSE servers")
 		fmt.Println()
 		fmt.Println("Examples:")
 		fmt.Println("  miya mcp add filesystem --command npx --args \"-y @modelcontextprotocol/server-filesystem ~\"")
-		fmt.Println("  miya mcp add memory --command npx --args \"-y @modelcontextprotocol/server-memory\"")
+		fmt.Println("  miya mcp add remote --type sse --url https://example.com/sse --header Authorization=Bearer_xxx")
 		fmt.Println("  miya mcp add myserver --command python --args \"server.py\" --env API_KEY=abc123 --env DEBUG=true")
 		return
 	}
@@ -432,16 +435,32 @@ func mcpAddCommand(args []string) {
 	}
 
 	flagSet := flag.NewFlagSet("mcp add", flag.ExitOnError)
+	transportType := flagSet.String("type", "stdio", "Transport type: stdio, http, or sse")
 	command := flagSet.String("command", "", "Command to run the MCP server")
+	serverURL := flagSet.String("url", "", "URL for HTTP/SSE MCP servers")
 	argsStr := flagSet.String("args", "", "Arguments for the command")
 
 	var envs envVars
 	flagSet.Var(&envs, "env", "Environment variables (KEY=VALUE)")
+	var headers envVars
+	flagSet.Var(&headers, "header", "HTTP headers (KEY=VALUE)")
 
 	flagSet.Parse(args[1:])
 
-	if *command == "" {
-		fmt.Println("Error: --command is required")
+	kind := strings.ToLower(strings.TrimSpace(*transportType))
+	if kind == "" {
+		kind = "stdio"
+	}
+	if kind != "stdio" && kind != "http" && kind != "sse" {
+		fmt.Println("Error: --type must be one of stdio, http, or sse")
+		return
+	}
+	if kind == "stdio" && *command == "" {
+		fmt.Println("Error: --command is required for stdio MCP servers")
+		return
+	}
+	if (kind == "http" || kind == "sse") && *serverURL == "" {
+		fmt.Println("Error: --url is required for HTTP/SSE MCP servers")
 		return
 	}
 
@@ -461,6 +480,15 @@ func mcpAddCommand(args []string) {
 		}
 		envMap[parts[0]] = parts[1]
 	}
+	headerMap := make(map[string]string)
+	for _, header := range headers {
+		parts := strings.SplitN(header, "=", 2)
+		if len(parts) != 2 {
+			fmt.Printf("Warning: invalid header format '%s', expected KEY=VALUE\n", header)
+			continue
+		}
+		headerMap[parts[0]] = parts[1]
+	}
 
 	// Load existing config
 	cfg, err := config.LoadConfig()
@@ -479,9 +507,12 @@ func mcpAddCommand(args []string) {
 
 	// Add/update the MCP server
 	cfg.McpServers[name] = &mcp.McpServerConfig{
+		Type:    kind,
 		Command: *command,
 		Args:    cmdArgs,
 		Env:     envMap,
+		URL:     *serverURL,
+		Headers: headerMap,
 	}
 
 	// Save config
@@ -491,12 +522,21 @@ func mcpAddCommand(args []string) {
 	}
 
 	fmt.Printf("Successfully added MCP server '%s'\n", name)
-	fmt.Printf("  Command: %s\n", *command)
+	fmt.Printf("  Type: %s\n", kind)
+	if *command != "" {
+		fmt.Printf("  Command: %s\n", *command)
+	}
+	if *serverURL != "" {
+		fmt.Printf("  URL: %s\n", *serverURL)
+	}
 	if len(cmdArgs) > 0 {
 		fmt.Printf("  Args: %s\n", *argsStr)
 	}
 	if len(envMap) > 0 {
 		fmt.Printf("  Env: %v\n", envMap)
+	}
+	if len(headerMap) > 0 {
+		fmt.Printf("  Headers: %v\n", headerMap)
 	}
 }
 
@@ -516,12 +556,25 @@ func mcpListCommand() {
 	fmt.Println()
 	for name, server := range cfg.McpServers {
 		fmt.Printf("  %s:\n", name)
-		fmt.Printf("    Command: %s\n", server.Command)
+		kind := server.Type
+		if kind == "" {
+			kind = "stdio"
+		}
+		fmt.Printf("    Type: %s\n", kind)
+		if server.Command != "" {
+			fmt.Printf("    Command: %s\n", server.Command)
+		}
+		if server.URL != "" {
+			fmt.Printf("    URL: %s\n", server.URL)
+		}
 		if len(server.Args) > 0 {
 			fmt.Printf("    Args: %s\n", strings.Join(server.Args, " "))
 		}
 		if len(server.Env) > 0 {
 			fmt.Printf("    Env: %v\n", server.Env)
+		}
+		if len(server.Headers) > 0 {
+			fmt.Printf("    Headers: %v\n", server.Headers)
 		}
 		fmt.Println()
 	}
