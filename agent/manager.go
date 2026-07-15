@@ -29,7 +29,7 @@ func NewAgentManager(config *config.Config) *Manager {
 }
 
 func (m *Manager) UseAgent(name string) (a *Agent, err error) {
-	ac, ok := m.config.Agents[name]
+	ac, ok := m.config.Profiles[name]
 	if !ok {
 		err = fmt.Errorf("agent not found: %s", name)
 		return
@@ -112,8 +112,8 @@ func (m *Manager) Authenticate(ctx context.Context, req *acp.AuthenticateRequest
 
 func (m *Manager) NewSession(ctx context.Context, req *acp.NewSessionRequest, sender acp.SessionUpdateSender) (*acp.NewSessionResponse, error) {
 	agentName := "default"
-	if _, ok := m.config.Agents["default"]; !ok {
-		for name := range m.config.Agents {
+	if _, ok := m.config.Profiles["default"]; !ok {
+		for name := range m.config.Profiles {
 			agentName = name
 			break
 		}

@@ -59,7 +59,7 @@ func main() {
 		acpCommand()
 	case "skills":
 		skillsCommand()
-	case "agent":
+	case "profile":
 		agentCommand()
 	case "models":
 		modelsCommand()
@@ -150,7 +150,7 @@ func runCommand(args []string) {
 	agentManager := agent.NewAgentManager(cfg)
 	ag, err := agentManager.UseAgent(agentName)
 	if err != nil {
-		log.Fatalf("agent error: %v", err)
+		log.Fatalf("profile error: %v", err)
 	}
 
 	mcpManager := tools.NewMcpManager(cfg.McpServers)
@@ -345,14 +345,14 @@ func printUsage() {
 	fmt.Println("Skills Examples:")
 	fmt.Println("  miya skills list")
 	fmt.Println()
-	fmt.Println("Agent Commands:")
-	fmt.Println("  miya agent list")
-	fmt.Println("  miya agent add <name> --provider <provider> --model <model>")
+	fmt.Println("Profile Commands:")
+	fmt.Println("  miya profile list")
+	fmt.Println("  miya profile add <name> --provider <provider> --model <model>")
 	fmt.Println()
-	fmt.Println("Agent Examples:")
-	fmt.Println("  miya agent list")
-	fmt.Println("  miya agent add myagent --provider openai --model gpt-4")
-	fmt.Println("  miya agent add coding --provider anthropic --model claude-3-5-sonnet")
+	fmt.Println("Profile Examples:")
+	fmt.Println("  miya profile list")
+	fmt.Println("  miya profile add myprofile --provider openai --model gpt-4")
+	fmt.Println("  miya profile add coding --provider anthropic --model claude-3-5-sonnet")
 	fmt.Println()
 	fmt.Println("Models Commands:")
 	fmt.Println("  miya models list <provider>    List available models for a provider")
@@ -722,15 +722,15 @@ func skillsListCommand() {
 
 func agentCommand() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: miya agent <subcommand> [options]")
+		fmt.Println("Usage: miya profile <subcommand> [options]")
 		fmt.Println()
 		fmt.Println("Subcommands:")
-		fmt.Println("  list    List all configured agents")
-		fmt.Println("  add     Add a new agent")
+		fmt.Println("  list    List all configured profiles")
+		fmt.Println("  add     Add a new profile")
 		fmt.Println()
 		fmt.Println("Examples:")
-		fmt.Println("  miya agent list")
-		fmt.Println("  miya agent add myagent --provider openai --model gpt-4")
+		fmt.Println("  miya profile list")
+		fmt.Println("  miya profile add myprofile --provider openai --model gpt-4")
 		return
 	}
 
@@ -742,7 +742,7 @@ func agentCommand() {
 		agentAddCommand(os.Args[3:])
 	default:
 		fmt.Printf("Unknown agent subcommand: %s\n", subcommand)
-		fmt.Println("Run 'miya agent' for usage.")
+		fmt.Println("Run 'miya profile' for usage.")
 	}
 }
 
@@ -753,14 +753,14 @@ func agentListCommand() {
 		return
 	}
 
-	if len(cfg.Agents) == 0 {
-		fmt.Println("No agents configured.")
+	if len(cfg.Profiles) == 0 {
+		fmt.Println("No profiles configured.")
 		return
 	}
 
-	fmt.Println("Configured Agents:")
+	fmt.Println("Configured Profiles:")
 	fmt.Println()
-	for name, agent := range cfg.Agents {
+	for name, agent := range cfg.Profiles {
 		fmt.Printf("  %s:\n", name)
 		fmt.Printf("    Provider: %s\n", agent.Provider)
 		fmt.Printf("    Model: %s\n", agent.ModelName)
@@ -773,7 +773,7 @@ func agentListCommand() {
 
 func agentAddCommand(args []string) {
 	if len(args) < 1 {
-		fmt.Println("Usage: miya agent add <name> --provider <provider> --model <model>")
+		fmt.Println("Usage: miya profile add <name> --provider <provider> --model <model>")
 		fmt.Println()
 		fmt.Println("Options:")
 		fmt.Println("  --provider <provider>   The provider name (required)")
@@ -781,19 +781,19 @@ func agentAddCommand(args []string) {
 		fmt.Println("  --workspace <path>      Workspace directory (optional)")
 		fmt.Println()
 		fmt.Println("Examples:")
-		fmt.Println("  miya agent add myagent --provider openai --model gpt-4")
-		fmt.Println("  miya agent add coding --provider anthropic --model claude-3-5-sonnet")
-		fmt.Println("  miya agent add dev --provider openai --model gpt-4 --workspace ~/projects/mybot")
+		fmt.Println("  miya profile add myprofile --provider openai --model gpt-4")
+		fmt.Println("  miya profile add coding --provider anthropic --model claude-3-5-sonnet")
+		fmt.Println("  miya profile add dev --provider openai --model gpt-4 --workspace ~/projects/mybot")
 		return
 	}
 
 	name := args[0]
 	if name == "" {
-		fmt.Println("Error: agent name cannot be empty")
+		fmt.Println("Error: profile name cannot be empty")
 		return
 	}
 
-	flagSet := flag.NewFlagSet("agent add", flag.ExitOnError)
+	flagSet := flag.NewFlagSet("profile add", flag.ExitOnError)
 	provider := flagSet.String("provider", "", "Provider name (required)")
 	model := flagSet.String("model", "", "Model name (required)")
 	workspace := flagSet.String("workspace", "", "Workspace directory")
@@ -817,16 +817,16 @@ func agentAddCommand(args []string) {
 		return
 	}
 
-	// Check if agent already exists
-	if cfg.Agents == nil {
-		cfg.Agents = make(map[string]*config.AgentConfig)
+	// Check if profile already exists
+	if cfg.Profiles == nil {
+		cfg.Profiles = make(map[string]*config.ProfileConfig)
 	}
-	if _, exists := cfg.Agents[name]; exists {
-		fmt.Printf("Warning: agent '%s' already exists, updating...\n", name)
+	if _, exists := cfg.Profiles[name]; exists {
+		fmt.Printf("Warning: profile '%s' already exists, updating...\n", name)
 	}
 
-	// Add/update the agent
-	cfg.Agents[name] = &config.AgentConfig{
+	// Add/update the profile
+	cfg.Profiles[name] = &config.ProfileConfig{
 		Provider:  *provider,
 		ModelName: *model,
 		Workspace: *workspace,
@@ -838,7 +838,7 @@ func agentAddCommand(args []string) {
 		return
 	}
 
-	fmt.Printf("Successfully added agent '%s'\n", name)
+	fmt.Printf("Successfully added profile '%s'\n", name)
 	fmt.Printf("  Provider: %s\n", *provider)
 	fmt.Printf("  Model: %s\n", *model)
 	if *workspace != "" {
@@ -1126,7 +1126,7 @@ func onboardCommand() {
 	fmt.Println("An agent is a configuration that connects a provider to a specific model.")
 	fmt.Println()
 
-	agentName := promptInput("Enter agent name (e.g., default, assistant): ")
+	agentName := promptInput("Enter profile name (e.g., default, assistant): ")
 	if agentName == "" {
 		agentName = "default"
 	}
@@ -1154,7 +1154,7 @@ func onboardCommand() {
 	if err != nil {
 		// Create new config if none exists
 		cfg = &config.Config{
-			Agents:    make(map[string]*config.AgentConfig),
+			Profiles:  make(map[string]*config.ProfileConfig),
 			Providers: make(map[string]*config.ProviderConfig),
 		}
 	}
@@ -1168,11 +1168,11 @@ func onboardCommand() {
 		APIBase: apiBase,
 	}
 
-	// Add agent
-	if cfg.Agents == nil {
-		cfg.Agents = make(map[string]*config.AgentConfig)
+	// Add profile
+	if cfg.Profiles == nil {
+		cfg.Profiles = make(map[string]*config.ProfileConfig)
 	}
-	cfg.Agents[agentName] = &config.AgentConfig{
+	cfg.Profiles[agentName] = &config.ProfileConfig{
 		Provider:  providerName,
 		ModelName: modelName,
 		Workspace: workspace,
@@ -1192,7 +1192,7 @@ func onboardCommand() {
 	if apiBase != "" {
 		fmt.Printf("  API Base: %s\n", apiBase)
 	}
-	fmt.Printf("  Agent: %s\n", agentName)
+	fmt.Printf("  Profile: %s\n", agentName)
 	fmt.Printf("  Model: %s\n", modelName)
 	if workspace != "" {
 		fmt.Printf("  Workspace: %s\n", workspace)

@@ -2,6 +2,7 @@ package acp
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,9 @@ func TestOpenCodeACP(t *testing.T) {
 func TestMiyaAgentsACP(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skip integration test in short mode")
+	}
+	if os.Getenv("MIYA_AGENTS_INTEGRATION") != "1" {
+		t.Skip("set MIYA_AGENTS_INTEGRATION=1 to run miya-agents ACP integration test")
 	}
 
 	binPath := filepath.Join(t.TempDir(), "miya-agents")

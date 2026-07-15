@@ -10,14 +10,28 @@ import (
 	"github.com/lsongdev/miya-agents/mcp"
 )
 
+type McpServerConfig = mcp.McpServerConfig
+
 // Config is the root configuration structure.
 type Config struct {
-	Agents     map[string]*AgentConfig         `json:"agents" yaml:"agents"`
-	Providers  map[string]*ProviderConfig      `json:"providers" yaml:"providers"` // Provider configurations
-	McpServers map[string]*mcp.McpServerConfig `json:"mcpServers,omitempty"`
-	// Channels   map[string]json.RawMessage      `json:"channels,omitempty" yaml:"channels,omitempty"`
-	Tools   map[string]json.RawMessage `json:"tools,omitempty" yaml:"tools,omitempty"`
-	Logging LoggingConfig              `json:"logging,omitempty" yaml:"logging,omitempty"`
+	Agents     []ACPAgentConfig            `json:"agents,omitempty" yaml:"agents,omitempty"`
+	Profiles   map[string]*ProfileConfig   `json:"profiles" yaml:"profiles"`
+	Providers  map[string]*ProviderConfig  `json:"providers" yaml:"providers"` // Provider configurations
+	McpServers map[string]*McpServerConfig `json:"mcpServers,omitempty"`
+	Channels   map[string]any              `json:"channels,omitempty" yaml:"channels,omitempty"`
+	Tools      map[string]json.RawMessage  `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Logging    LoggingConfig               `json:"logging,omitempty" yaml:"logging,omitempty"`
+}
+
+// ACPAgentConfig contains an externally callable ACP agent endpoint.
+type ACPAgentConfig struct {
+	ID      string            `json:"id" yaml:"id"`
+	Name    string            `json:"name,omitempty" yaml:"name,omitempty"`
+	Type    string            `json:"type,omitempty" yaml:"type,omitempty"` // stdio (default), http, or sse
+	Command string            `json:"command,omitempty" yaml:"command,omitempty"`
+	Args    []string          `json:"args,omitempty" yaml:"args,omitempty"`
+	URL     string            `json:"url,omitempty" yaml:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
 }
 
 // ProviderConfig contains API credentials for a providers.
@@ -27,8 +41,8 @@ type ProviderConfig struct {
 	Type    string `json:"type,omitempty" yaml:"type,omitempty"`       // "openai" (default) or "anthropic"
 }
 
-// ThreadConfig contains thread runtime defaults.
-type AgentConfig struct {
+// ProfileConfig contains miya-agents runtime defaults.
+type ProfileConfig struct {
 	Provider            string  `json:"provider" yaml:"provider"`                                           // provider name, e.g. "openai"
 	ModelName           string  `json:"model,omitempty" yaml:"model"`                                       // model name, e.g. "deepseek-chat"
 	Workspace           string  `json:"workspace,omitempty" yaml:"workspace,omitempty"`                     // defaults to ~/.miya/workspace
@@ -38,7 +52,7 @@ type AgentConfig struct {
 	ContextWarnRatio    float64 `json:"contextWarnRatio,omitempty" yaml:"contextWarnRatio,omitempty"`       // defaults to 0.8
 }
 
-func (ac *AgentConfig) GetWorkspace() string {
+func (ac *ProfileConfig) GetWorkspace() string {
 	return expandPath(ac.Workspace)
 }
 

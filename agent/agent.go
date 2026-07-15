@@ -18,7 +18,7 @@ type Writer interface {
 
 type Agent struct {
 	Name   string
-	Config *config.AgentConfig
+	Config *config.ProfileConfig
 	LLM    *openai.Client
 	// tools
 	toolsMap  map[string]openai.Tool
