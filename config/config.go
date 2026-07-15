@@ -19,8 +19,10 @@ type Config struct {
 	Providers  map[string]*ProviderConfig  `json:"providers" yaml:"providers"` // Provider configurations
 	McpServers map[string]*McpServerConfig `json:"mcpServers,omitempty"`
 	Channels   map[string]any              `json:"channels,omitempty" yaml:"channels,omitempty"`
-	Tools      map[string]json.RawMessage  `json:"tools,omitempty" yaml:"tools,omitempty"`
-	Logging    LoggingConfig               `json:"logging,omitempty" yaml:"logging,omitempty"`
+	// ChannelsEnabled controls whether desktop should run the remote channel gateway.
+	ChannelsEnabled *bool                      `json:"channelsEnabled,omitempty" yaml:"channelsEnabled,omitempty"`
+	Tools           map[string]json.RawMessage `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Logging         LoggingConfig              `json:"logging,omitempty" yaml:"logging,omitempty"`
 }
 
 // ACPAgentConfig contains an externally callable ACP agent endpoint.
