@@ -27,11 +27,42 @@ type Config struct {
 type ACPAgentConfig struct {
 	ID      string            `json:"id" yaml:"id"`
 	Name    string            `json:"name,omitempty" yaml:"name,omitempty"`
+	Enabled *bool             `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	Type    string            `json:"type,omitempty" yaml:"type,omitempty"` // stdio (default), http, or sse
 	Command string            `json:"command,omitempty" yaml:"command,omitempty"`
 	Args    []string          `json:"args,omitempty" yaml:"args,omitempty"`
 	URL     string            `json:"url,omitempty" yaml:"url,omitempty"`
 	Headers map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
+}
+
+func (a ACPAgentConfig) IsEnabled() bool {
+	return a.Enabled == nil || *a.Enabled
+}
+
+func (c *Config) UnmarshalJSON(data []byte) error {
+	var probe struct {
+		Agents json.RawMessage `json:"agents"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+	if len(probe.Agents) > 0 {
+		var v any
+		if err := json.Unmarshal(probe.Agents, &v); err != nil {
+			return err
+		}
+		if _, ok := v.(map[string]any); ok {
+			return fmt.Errorf("config field agents must be an array of ACP endpoints; move old agents object to profiles")
+		}
+	}
+
+	type alias Config
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*c = Config(decoded)
+	return nil
 }
 
 // ProviderConfig contains API credentials for a providers.
