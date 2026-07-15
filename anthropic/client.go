@@ -23,6 +23,12 @@ type Client struct {
 	client *http.Client
 }
 
+type Model struct {
+	ID          string `json:"id"`
+	Type        string `json:"type,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
 // NewClient creates a new Anthropic client.
 func NewClient(config *Configuration) *Client {
 	return &Client{
@@ -69,6 +75,22 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 	}
 
 	return resp, nil
+}
+
+func (c *Client) Models(ctx context.Context) ([]Model, error) {
+	resp, err := c.makeRequest(ctx, "GET", "/v1/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []Model `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode models response: %w", err)
+	}
+	return result.Data, nil
 }
 
 // CreateMessage sends a non-streaming message request.

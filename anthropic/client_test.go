@@ -33,6 +33,36 @@ func TestSetHTTPClient(t *testing.T) {
 	}
 }
 
+func TestModels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("path = %q, want /v1/models", r.URL.Path)
+		}
+		if key := r.Header.Get("x-api-key"); key != "test-key" {
+			t.Errorf("x-api-key = %q, want test-key", key)
+		}
+		if ver := r.Header.Get("anthropic-version"); ver != "2023-06-01" {
+			t.Errorf("anthropic-version = %q, want 2023-06-01", ver)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"data": []Model{{ID: "claude-3-5-haiku-latest"}},
+		})
+	}))
+	defer server.Close()
+
+	c := NewClient(&Configuration{API: server.URL, APIKey: "test-key"})
+	models, err := c.Models(context.Background())
+	if err != nil {
+		t.Fatalf("Models: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "claude-3-5-haiku-latest" {
+		t.Fatalf("models = %+v", models)
+	}
+}
+
 func TestCreateMessage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
