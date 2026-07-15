@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -56,6 +57,30 @@ func (m *Manager) UseAgent(name string) (a *Agent, err error) {
 	a.BuildTools()
 	a.AddTool(tools.NewSubagentTool(m))
 	return
+}
+
+func (m *Manager) defaultAgentName() (string, error) {
+	if _, ok := m.config.Profiles["default"]; ok {
+		return "default", nil
+	}
+	names := make([]string, 0, len(m.config.Profiles))
+	for name := range m.config.Profiles {
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return "", fmt.Errorf("no profiles configured")
+	}
+	sort.Strings(names)
+	return names[0], nil
+}
+
+func (m *Manager) resolveAgentName(name string) (string, error) {
+	if name != "" {
+		if _, ok := m.config.Profiles[name]; ok {
+			return name, nil
+		}
+	}
+	return m.defaultAgentName()
 }
 
 type captureWriter struct {
@@ -111,12 +136,9 @@ func (m *Manager) Authenticate(ctx context.Context, req *acp.AuthenticateRequest
 }
 
 func (m *Manager) NewSession(ctx context.Context, req *acp.NewSessionRequest, sender acp.SessionUpdateSender) (*acp.NewSessionResponse, error) {
-	agentName := "default"
-	if _, ok := m.config.Profiles["default"]; !ok {
-		for name := range m.config.Profiles {
-			agentName = name
-			break
-		}
+	agentName, err := m.defaultAgentName()
+	if err != nil {
+		return nil, err
 	}
 
 	sess := session.New(agentName)
@@ -138,6 +160,13 @@ func (m *Manager) Prompt(ctx context.Context, req *acp.PromptRequest, sender acp
 	if err != nil {
 		return nil, fmt.Errorf("load session: %w", err)
 	}
+	agentName, err := m.resolveAgentName(sess.AgentName)
+	if err != nil {
+		return nil, err
+	}
+	if sess.AgentName != agentName {
+		sess.AgentName = agentName
+	}
 
 	var textParts []string
 	for _, block := range req.Prompt {
@@ -148,7 +177,7 @@ func (m *Manager) Prompt(ctx context.Context, req *acp.PromptRequest, sender acp
 	prompt := strings.Join(textParts, "\n")
 	sess.AppendRequest(prompt)
 
-	ag, err := m.UseAgent(sess.AgentName)
+	ag, err := m.UseAgent(agentName)
 	if err != nil {
 		return nil, fmt.Errorf("use agent: %w", err)
 	}
