@@ -212,10 +212,41 @@ func (w *acpWriter) Write(s string, done bool) error {
 }
 
 func (m *Manager) LoadSession(ctx context.Context, req *acp.LoadSessionRequest, sender acp.SessionUpdateSender) (*acp.LoadSessionResponse, error) {
-	if _, err := session.Load(string(req.SessionID)); err != nil {
+	sess, err := session.Load(string(req.SessionID))
+	if err != nil {
 		return nil, fmt.Errorf("load session: %w", err)
 	}
+	if err := replaySession(sess, sender); err != nil {
+		return nil, fmt.Errorf("replay session: %w", err)
+	}
 	return &acp.LoadSessionResponse{}, nil
+}
+
+func replaySession(sess *session.Session, sender acp.SessionUpdateSender) error {
+	for _, msg := range sess.Messages {
+		if strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+		updateType := ""
+		switch msg.Role {
+		case openai.RoleUser:
+			updateType = "user_message_chunk"
+		case openai.RoleAssistant:
+			updateType = "agent_message_chunk"
+		default:
+			continue
+		}
+		if err := sender.Send(acp.SessionUpdate{
+			SessionUpdate: updateType,
+			Content:       acp.ContentBlock{Type: "text", Text: msg.Content},
+		}); err != nil {
+			return err
+		}
+	}
+	return sender.Send(acp.SessionUpdate{
+		SessionUpdate: "usage_update",
+		Usage:         &acp.UsageUpdate{},
+	})
 }
 
 func (m *Manager) ResumeSession(ctx context.Context, req *acp.ResumeSessionRequest) (*acp.ResumeSessionResponse, error) {
