@@ -16,11 +16,12 @@ type NotificationHandler func(method string, params json.RawMessage)
 
 // Client is an ACP client that communicates with an ACP agent over stdio.
 type Client struct {
-	stdin           io.WriteCloser
-	stdout          *bufio.Reader
-	mu              sync.Mutex
-	id              atomic.Int64
-	onNotification  NotificationHandler
+	stdin          io.WriteCloser
+	stdout         *bufio.Reader
+	callMu         sync.Mutex
+	writeMu        sync.Mutex
+	id             atomic.Int64
+	onNotification NotificationHandler
 }
 
 // OnNotification registers a handler for incoming notifications.
@@ -61,8 +62,8 @@ func NewClient(stdin io.WriteCloser, stdout io.Reader) *Client {
 }
 
 func (c *Client) sendRecv(method string, params, result any) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.callMu.Lock()
+	defer c.callMu.Unlock()
 
 	id := c.id.Add(1)
 	req := jsonrpcRequest{
@@ -78,7 +79,10 @@ func (c *Client) sendRecv(method string, params, result any) error {
 	}
 	data = append(data, '\n')
 
-	if _, err := c.stdin.Write(data); err != nil {
+	c.writeMu.Lock()
+	_, err = c.stdin.Write(data)
+	c.writeMu.Unlock()
+	if err != nil {
 		return fmt.Errorf("acp: write request: %w", err)
 	}
 
@@ -106,10 +110,10 @@ func (c *Client) sendRecv(method string, params, result any) error {
 		}
 
 		var raw struct {
-			ID     any              `json:"id"`
-			Method string           `json:"method"`
-			Result json.RawMessage  `json:"result,omitempty"`
-			Error  *jsonrpcError    `json:"error,omitempty"`
+			ID     any             `json:"id"`
+			Method string          `json:"method"`
+			Result json.RawMessage `json:"result,omitempty"`
+			Error  *jsonrpcError   `json:"error,omitempty"`
 		}
 		if err := json.Unmarshal(line, &raw); err != nil {
 			if readErr != nil {
@@ -172,9 +176,6 @@ func (c *Client) sendRecv(method string, params, result any) error {
 
 // SendNotification sends a JSON-RPC notification (no response expected).
 func (c *Client) SendNotification(method string, params any) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	notif := jsonrpcNotification{
 		JSONRPC: "2.0",
 		Method:  method,
@@ -187,6 +188,8 @@ func (c *Client) SendNotification(method string, params any) error {
 	}
 	data = append(data, '\n')
 
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	if _, err := c.stdin.Write(data); err != nil {
 		return fmt.Errorf("acp: write notification: %w", err)
 	}
