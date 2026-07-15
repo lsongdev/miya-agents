@@ -30,7 +30,7 @@ type ACPAgentConfig struct {
 	ID      string            `json:"id" yaml:"id"`
 	Name    string            `json:"name,omitempty" yaml:"name,omitempty"`
 	Enabled *bool             `json:"enabled,omitempty" yaml:"enabled,omitempty"`
-	Type    string            `json:"type,omitempty" yaml:"type,omitempty"` // stdio (default), http, or sse
+	Type    string            `json:"type,omitempty" yaml:"type,omitempty"` // builtin, stdio (default), http, or sse
 	Command string            `json:"command,omitempty" yaml:"command,omitempty"`
 	Args    []string          `json:"args,omitempty" yaml:"args,omitempty"`
 	URL     string            `json:"url,omitempty" yaml:"url,omitempty"`
