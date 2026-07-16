@@ -171,6 +171,9 @@ func (a *Agent) readSystemPrompt() string {
 
 func (a *Agent) BuildTools() {
 	workspace := a.Config.GetWorkspace()
+	if workspace != "" {
+		_ = os.MkdirAll(workspace, 0755)
+	}
 	var tools = []openai.Tool{
 		&tools.WebFetchTool{},
 		&tools.WebSearchTool{},

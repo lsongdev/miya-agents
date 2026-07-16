@@ -86,7 +86,11 @@ type ProfileConfig struct {
 }
 
 func (ac *ProfileConfig) GetWorkspace() string {
-	return expandPath(ac.Workspace)
+	workspace := expandPath(ac.Workspace)
+	if workspace != "" {
+		return workspace
+	}
+	return filepath.Join(ConfigPath, "workspace")
 }
 
 // LoggingConfig contains logging configuration.
