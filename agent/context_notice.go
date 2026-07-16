@@ -9,7 +9,7 @@ import (
 	"github.com/lsongdev/miya-agents/session"
 )
 
-const maintenanceNoticePrefix = "[miya context]"
+const maintenanceNoticePrefix = "[context maintenance notice]"
 
 func (a *Agent) AppendContextMaintenanceNotice(sess *session.Session) {
 	sess.Messages = removeContextMaintenanceNotices(sess.Messages)
