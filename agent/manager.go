@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lsongdev/miya-agents/acp"
 	"github.com/lsongdev/miya-agents/config"
@@ -275,8 +276,19 @@ func (m *Manager) ListSessions(ctx context.Context, req *acp.ListSessionsRequest
 	}
 	infos := make([]acp.SessionInfo, 0, len(sessions))
 	for _, s := range sessions {
+		var title *string
+		if value := s.DisplayTitle(); value != "" {
+			title = &value
+		}
+		var updatedAt *string
+		if !s.UpdatedAt.IsZero() {
+			value := s.UpdatedAt.Format(time.RFC3339)
+			updatedAt = &value
+		}
 		infos = append(infos, acp.SessionInfo{
 			SessionID: acp.SessionID(s.ID),
+			Title:     title,
+			UpdatedAt: updatedAt,
 		})
 	}
 	return &acp.ListSessionsResponse{Sessions: infos}, nil

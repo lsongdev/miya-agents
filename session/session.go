@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/lsongdev/miya-agents/config"
@@ -16,7 +17,9 @@ import (
 type Session struct {
 	ID        string                         `json:"id"`
 	AgentName string                         `json:"agent_name"`
+	Title     string                         `json:"title,omitempty"`
 	CreatedAt time.Time                      `json:"created_at"`
+	UpdatedAt time.Time                      `json:"updated_at,omitempty"`
 	Messages  []openai.ChatCompletionMessage `json:"messages"`
 }
 
@@ -145,6 +148,7 @@ func (s *Session) Save() error {
 	if s.CreatedAt.IsZero() {
 		s.CreatedAt = time.Now()
 	}
+	s.UpdatedAt = time.Now()
 	path := sessionPath(s.ID)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("failed to create session directory: %w", err)
@@ -167,4 +171,18 @@ func (s *Session) FirstUserMessage() string {
 		}
 	}
 	return ""
+}
+
+func (s *Session) DisplayTitle() string {
+	if title := strings.TrimSpace(s.Title); title != "" {
+		return title
+	}
+	title := strings.Join(strings.Fields(s.FirstUserMessage()), " ")
+	if title == "" {
+		return ""
+	}
+	if len(title) > 64 {
+		title = title[:61] + "..."
+	}
+	return title
 }
