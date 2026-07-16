@@ -12,7 +12,7 @@ The current loop is intentionally simple:
 - Session files persist OpenAI chat messages for model context and ACP session events for UI replay.
 - ACP replay sends the persisted event log in order.
 
-This works for basic structured replay. The remaining gaps are richer event types, session-maintenance skill guidance, and better generated metadata quality.
+This works for basic structured replay. The remaining gaps are richer event types, user-provided maintenance guidance, and better generated metadata quality.
 
 ## Problem Areas
 
@@ -35,11 +35,11 @@ Session files now keep `[]openai.ChatCompletionMessage` and `[]session.Event` se
 
 ### Context Compaction
 
-Long-running sessions need a way to reduce old context while keeping task continuity. miya-agents keeps runtime behavior minimal: when the estimated context window is nearly full, it appends a short system notice with the session id/path so the next model turn can use a session-maintenance skill to compact the session JSON.
+Long-running sessions need a way to reduce old context while keeping task continuity. miya-agents keeps runtime behavior minimal: when the estimated context window is nearly full, it appends a short system notice with the session id/path so the next model turn can compact the session JSON using user-provided guidance.
 
 ### Session Titles
 
-Using the session ID as the visible title is poor UX. The current fallback is the first user message; richer title and summary updates can be handled by session-maintenance skills editing session metadata.
+Using the session ID as the visible title is poor UX. The current fallback is the first user message; richer title and summary updates can be handled by user-provided skills or prompts that edit session metadata.
 
 ## Target Architecture
 
@@ -105,12 +105,12 @@ Initial implementation:
 1. Runtime estimates current message size against the configured context window.
 2. If the remaining window is below the warning threshold, append one short maintenance notice to `messages`.
 3. The notice includes the session id and `~/.miya/sessions/<id>.json`.
-4. A session-maintenance skill describes how to compact `messages`, update `summary/title/compactions`, and leave `events` unchanged.
+4. User-provided maintenance guidance describes how to compact `messages`, update `summary/title/compactions`, and leave `events` unchanged.
 
 Current and potential entry points:
 
 - Context pressure notice appended by runtime.
-- Session-maintenance skill invoked by the model.
+- User-provided skill or prompt invoked by the model.
 - Future CLI command: `miya sessions compact <id>`
 - ACP method or command if the protocol surface supports it later
 
@@ -141,7 +141,7 @@ Current approach:
 2. Return title/updatedAt from `session/list`. Done.
 3. Persist replayable session events. Done.
 4. Add context pressure notice. Done.
-5. Add session-maintenance skill.
+5. Add optional user-facing maintenance guidance.
 6. Add manual compaction command if the skill-based flow is not enough.
 
 ## Notes

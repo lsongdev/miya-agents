@@ -9,7 +9,7 @@ import (
 	"github.com/lsongdev/miya-agents/session"
 )
 
-const maintenanceNoticePrefix = "[miya session maintenance]"
+const maintenanceNoticePrefix = "[miya context]"
 
 func (a *Agent) AppendContextMaintenanceNotice(sess *session.Session) {
 	sess.Messages = removeContextMaintenanceNotices(sess.Messages)
@@ -33,7 +33,7 @@ func (a *Agent) AppendContextMaintenanceNotice(sess *session.Session) {
 	if remainingPercent < 0 {
 		remainingPercent = 0
 	}
-	notice := fmt.Sprintf("%s context window remaining ~%d%% for session %s; use the session-maintenance skill to compact ~/.miya/sessions/%s.json before continuing substantial work, and do not modify events.", maintenanceNoticePrefix, remainingPercent, sess.ID, sess.ID)
+	notice := fmt.Sprintf("%s ~%d%% context remaining for session %s; consider compacting ~/.miya/sessions/%s.json before substantial work.", maintenanceNoticePrefix, remainingPercent, sess.ID, sess.ID)
 	sess.Messages = append(sess.Messages, openai.SystemMessage(notice))
 }
 

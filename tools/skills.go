@@ -18,7 +18,7 @@ type SkillsTool struct {
 }
 
 func (t *SkillsTool) reloadSkillsFromDirectory() (err error) {
-	t.skills = builtinSkills()
+	t.skills = map[string]*skills.Skill{}
 	files, err := skills.LoadSkillsFromDirectory(t.Workspace)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -30,16 +30,6 @@ func (t *SkillsTool) reloadSkillsFromDirectory() (err error) {
 		t.skills[skill.Name] = skill
 	}
 	return
-}
-
-func builtinSkills() map[string]*skills.Skill {
-	return map[string]*skills.Skill{
-		"session-maintenance": {
-			Name:        "session-maintenance",
-			Description: "Compact or update a miya session JSON file when context is low.",
-			Prompt:      strings.TrimSpace(`When a miya session maintenance notice appears, read the referenced ~/.miya/sessions/<id>.json file, compact older messages into one concise system summary, update title/summary/compactions when useful, preserve recent active context, and never modify events.`),
-		},
-	}
 }
 
 // Def returns the tool definition.
