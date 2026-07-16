@@ -2,10 +2,14 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/lsongdev/miya-agents/acp"
 	"github.com/lsongdev/miya-agents/config"
+	"github.com/lsongdev/miya-agents/mcp"
 	"github.com/lsongdev/miya-agents/session"
 )
 
@@ -53,6 +57,81 @@ func TestResolveAgentNameReportsEmptyProfiles(t *testing.T) {
 	if _, err := m.resolveAgentName("default"); err == nil {
 		t.Fatal("resolveAgentName succeeded, want error")
 	}
+}
+
+func TestUseAgentIncludesConfiguredMCPTools(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		switch req.Method {
+		case "initialize":
+			writeMCPEvent(t, w, req.ID, map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities": map[string]any{
+					"tools": map[string]any{},
+				},
+				"serverInfo": map[string]any{
+					"name":    "coffee-test",
+					"version": "1.0.0",
+				},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeMCPEvent(t, w, req.ID, map[string]any{
+				"tools": []map[string]any{{
+					"name":        "queryShopList",
+					"description": "query shops",
+					"inputSchema": map[string]any{
+						"type":       "object",
+						"properties": map[string]any{},
+					},
+				}},
+			})
+		default:
+			t.Fatalf("unexpected method: %s", req.Method)
+		}
+	}))
+	defer server.Close()
+
+	m := NewAgentManager(&config.Config{
+		Profiles: map[string]*config.ProfileConfig{
+			"default": {Provider: "openai", ModelName: "gpt-4"},
+		},
+		Providers: map[string]*config.ProviderConfig{
+			"openai": {APIKey: "test-key"},
+		},
+		McpServers: map[string]*mcp.McpServerConfig{
+			"coffee": {Type: "streamablehttp", URL: server.URL},
+		},
+	})
+
+	ag, err := m.UseAgent("default")
+	if err != nil {
+		t.Fatalf("UseAgent: %v", err)
+	}
+	if _, ok := ag.toolsMap["mcp_coffee_queryShopList"]; !ok {
+		t.Fatalf("missing MCP tool; tools = %#v", ag.toolsMap)
+	}
+}
+
+func writeMCPEvent(t *testing.T, w http.ResponseWriter, id int64, result any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "text/event-stream")
+	payload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  result,
+	})
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", payload)
 }
 
 type recordingSender struct {

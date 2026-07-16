@@ -165,9 +165,7 @@ func NewHTTPClient(server *McpServerConfig) (*Client, error) {
 	if server.URL == "" {
 		return nil, fmt.Errorf("mcp http: url is required")
 	}
-	transport := transports.NewHTTPTransport(server.URL, &transports.HTTPOptions{
-		Headers: server.Headers,
-	})
+	transport := NewStreamableHTTPTransport(server.URL, server.Headers)
 	return NewClient(transport), nil
 }
 
@@ -190,6 +188,8 @@ func NewConfiguredClient(server *McpServerConfig) (*Client, error) {
 		}
 		return NewStdioClient(server)
 	case "http":
+		return NewHTTPClient(server)
+	case "streamable", "streamable-http", "streamable_http", "streamablehttp":
 		return NewHTTPClient(server)
 	case "sse":
 		return NewSSEClient(server)

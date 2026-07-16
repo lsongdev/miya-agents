@@ -101,10 +101,14 @@ type LoggingConfig struct {
 	File    string `json:"file,omitempty" yaml:"file,omitempty"`     // log file path
 }
 
-var ConfigPath = defaultConfigPath()
-var ConfigFile = filepath.Join(ConfigPath, "config.json")
+var ConfigPath = DefaultConfigPath()
+var ConfigFile = DefaultConfigFile()
 
-func defaultConfigPath() string {
+func DefaultConfigFile() string {
+	return filepath.Join(ConfigPath, "config.json")
+}
+
+func DefaultConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err == nil && home != "" {
 		return filepath.Join(home, ".miya")
@@ -119,18 +123,25 @@ func defaultConfigPath() string {
 }
 
 func LoadConfig() (cfg *Config, err error) {
-	if _, err := os.Stat(ConfigFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("config file not found: %s", ConfigFile)
+	return LoadConfigFromFile(ConfigFile)
+}
+
+func LoadConfigFromFile(path string) (cfg *Config, err error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("config file not found: %s: %w", path, err)
 	}
-	f, err := os.Open(ConfigFile)
 	if err != nil {
-		return
+		return nil, err
 	}
-	defer f.Close()
-	if err = json.NewDecoder(f).Decode(&cfg); err != nil {
-		return
+	if len(data) == 0 {
+		return NewConfig(), nil
 	}
-	return
+	if err = json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	Normalize(cfg)
+	return cfg, nil
 }
 
 // expandPath expands ~ to home directory and resolves the path.
@@ -145,10 +156,69 @@ func expandPath(path string) string {
 }
 
 func (c *Config) Save() error {
-	data, err := json.MarshalIndent(c, "", "  ")
+	return SaveConfigToFile(ConfigFile, c)
+}
+
+func SaveConfigToFile(path string, cfg *Config) error {
+	if cfg == nil {
+		cfg = NewConfig()
+	}
+	Normalize(cfg)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	// log.Println(string(data))
-	return os.WriteFile(ConfigFile, data, 0644)
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0600)
+}
+
+func NewConfig() *Config {
+	cfg := &Config{
+		Agents:     []ACPAgentConfig{},
+		Profiles:   map[string]*ProfileConfig{},
+		Providers:  map[string]*ProviderConfig{},
+		McpServers: map[string]*McpServerConfig{},
+		Channels:   map[string]any{},
+	}
+	Normalize(cfg)
+	return cfg
+}
+
+func Normalize(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	if cfg.Agents == nil {
+		cfg.Agents = []ACPAgentConfig{}
+	}
+	for i := range cfg.Agents {
+		if cfg.Agents[i].Type == "" {
+			cfg.Agents[i].Type = "stdio"
+		}
+	}
+	if cfg.Profiles == nil {
+		cfg.Profiles = map[string]*ProfileConfig{}
+	}
+	if cfg.Providers == nil {
+		cfg.Providers = map[string]*ProviderConfig{}
+	}
+	if cfg.McpServers == nil {
+		cfg.McpServers = map[string]*McpServerConfig{}
+	}
+	if cfg.Channels == nil {
+		cfg.Channels = map[string]any{}
+	}
+	for id, server := range cfg.McpServers {
+		if server.Type == "" {
+			if server.URL != "" && server.Command == "" {
+				server.Type = "sse"
+			} else {
+				server.Type = "stdio"
+			}
+			cfg.McpServers[id] = server
+		}
+	}
 }

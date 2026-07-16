@@ -56,6 +56,10 @@ func (m *Manager) UseAgent(name string) (a *Agent, err error) {
 		toolsDefs: []openai.ToolDef{},
 	}
 	a.BuildTools()
+	mcpManager := tools.NewMcpManager(m.config.McpServers)
+	for _, tool := range mcpManager.Tools {
+		a.AddTool(tool)
+	}
 	a.AddTool(tools.NewSubagentTool(m))
 	return
 }

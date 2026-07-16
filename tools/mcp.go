@@ -70,6 +70,19 @@ func NewMcpTool(rpc *mcp.Client, tool *mcp.Tool) openai.Tool {
 	}
 }
 
+type namedMcpTool struct {
+	tool openai.Tool
+	def  openai.ToolDef
+}
+
+func (m *namedMcpTool) Def() openai.ToolDef {
+	return m.def
+}
+
+func (m *namedMcpTool) Run(ctx context.Context, args string) string {
+	return m.tool.Run(ctx, args)
+}
+
 // Def implements [openai.Tool].
 func (m *McpTool) Def() openai.ToolDef {
 	return m.tool.Def()
@@ -160,7 +173,7 @@ func NewMcpManager(config map[string]*mcp.McpServerConfig) (manager *McpManager)
 			d := tool.Def()
 			toolName := fmt.Sprintf("mcp_%s_%s", serverName, d.Function.Name)
 			d.Function.Name = toolName
-			manager.Tools[toolName] = tool
+			manager.Tools[toolName] = &namedMcpTool{tool: tool, def: d}
 			manager.ToolDefs = append(manager.ToolDefs, d)
 		}
 	}

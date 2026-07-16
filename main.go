@@ -19,7 +19,6 @@ import (
 	"github.com/lsongdev/miya-agents/openai"
 	"github.com/lsongdev/miya-agents/router"
 	"github.com/lsongdev/miya-agents/session"
-	"github.com/lsongdev/miya-agents/tools"
 )
 
 // envVars is a custom flag.Value type for parsing multiple environment variables
@@ -156,12 +155,6 @@ func runCommand(args []string) {
 	ag, err := agentManager.UseAgent(agentName)
 	if err != nil {
 		log.Fatalf("profile error: %v", err)
-	}
-
-	mcpManager := tools.NewMcpManager(cfg.McpServers)
-	log.Printf("Available tools: %d\n", len(mcpManager.Tools))
-	for _, tool := range mcpManager.Tools {
-		ag.AddTool(tool)
 	}
 
 	if sess == nil {
@@ -716,23 +709,7 @@ func mcpRemoveCommand(args []string) {
 }
 
 func saveConfig(cfg *config.Config) error {
-	// Ensure config directory exists
-	if err := os.MkdirAll(config.ConfigPath, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	// Marshal config to JSON with indentation
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
-	}
-
-	// Write to config file
-	if err := os.WriteFile(config.ConfigFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
-	}
-
-	return nil
+	return config.SaveConfigToFile(config.ConfigFile, cfg)
 }
 
 func skillsCommand() {
