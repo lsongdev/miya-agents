@@ -2,8 +2,10 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"testing"
+	"time"
 )
 
 // testHandler is a minimal ACP handler for testing.
@@ -13,7 +15,7 @@ type testHandler struct {
 
 func (h *testHandler) Initialize(ctx context.Context, req *InitializeRequest) (*InitializeResponse, error) {
 	return &InitializeResponse{
-		ProtocolVersion: 1,
+		ProtocolVersion:   1,
 		AgentCapabilities: DefaultAgentCapabilities(),
 		AuthMethods:       []AuthMethod{},
 		AgentInfo: &Implementation{
@@ -166,6 +168,52 @@ func TestFullFlow(t *testing.T) {
 	}
 	if listResp.Sessions == nil {
 		t.Errorf("expected non-nil sessions list")
+	}
+}
+
+func TestClientReceivesNotificationAfterResponse(t *testing.T) {
+	serverReader, clientWriter := io.Pipe()
+	clientReader, serverWriter := io.Pipe()
+	client := NewClient(clientWriter, clientReader)
+	defer client.Close()
+	defer serverReader.Close()
+	defer serverWriter.Close()
+
+	notifications := make(chan string, 1)
+	client.OnNotification(func(method string, params json.RawMessage) {
+		notifications <- method
+	})
+
+	go func() {
+		var req jsonrpcRequest
+		_ = json.NewDecoder(serverReader).Decode(&req)
+		_ = json.NewEncoder(serverWriter).Encode(jsonrpcResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"promptCapabilities":{"image":true,"audio":true,"embeddedContext":true},"mcpCapabilities":{"http":true,"sse":true},"sessionCapabilities":{},"auth":{}},"authMethods":[],"agentInfo":{"name":"test","version":"1.0"}}`),
+		})
+		_ = json.NewEncoder(serverWriter).Encode(jsonrpcNotification{
+			JSONRPC: "2.0",
+			Method:  "session/update",
+			Params:  json.RawMessage(`{"sessionId":"s1","update":{"sessionUpdate":"tool_call"}}`),
+		})
+	}()
+
+	if _, err := client.Initialize(&InitializeRequest{
+		ProtocolVersion:    1,
+		ClientCapabilities: DefaultClientCapabilities(),
+		ClientInfo:         &Implementation{Name: "test-client", Version: "1.0"},
+	}); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	select {
+	case method := <-notifications:
+		if method != "session/update" {
+			t.Fatalf("notification method = %q", method)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for notification after response")
 	}
 }
 

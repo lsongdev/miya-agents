@@ -17,12 +17,19 @@ type NotificationHandler func(method string, params json.RawMessage)
 // Client is an ACP client that communicates with an ACP agent over stdio.
 type Client struct {
 	stdin          io.WriteCloser
-	stdout         *bufio.Reader
 	stdoutCloser   io.Closer
-	callMu         sync.Mutex
 	writeMu        sync.Mutex
 	id             atomic.Int64
 	onNotification NotificationHandler
+	pendingMu      sync.Mutex
+	pending        map[int64]chan clientResponse
+	closed         chan struct{}
+	closeOnce      sync.Once
+}
+
+type clientResponse struct {
+	result json.RawMessage
+	err    error
 }
 
 // OnNotification registers a handler for incoming notifications.
@@ -54,22 +61,18 @@ func DialStdio(command string, args ...string) (*Client, error) {
 // NewClient creates an ACP client from the given read/writer.
 func NewClient(stdin io.WriteCloser, stdout io.Reader) *Client {
 	client := &Client{
-		stdin: stdin,
-		// bufio.Reader.ReadBytes('\n') has no line-size limit, so replayed
-		// session/update notifications with large tool outputs won't close
-		// the connection the way bufio.Scanner's default 64KB cap did.
-		stdout: bufio.NewReaderSize(stdout, 64*1024),
+		stdin:   stdin,
+		pending: make(map[int64]chan clientResponse),
+		closed:  make(chan struct{}),
 	}
 	if closer, ok := stdout.(io.Closer); ok {
 		client.stdoutCloser = closer
 	}
+	go client.readLoop(stdout)
 	return client
 }
 
 func (c *Client) sendRecv(method string, params, result any) error {
-	c.callMu.Lock()
-	defer c.callMu.Unlock()
-
 	id := c.id.Add(1)
 	req := jsonrpcRequest{
 		JSONRPC: "2.0",
@@ -84,6 +87,12 @@ func (c *Client) sendRecv(method string, params, result any) error {
 	}
 	data = append(data, '\n')
 
+	respCh := make(chan clientResponse, 1)
+	c.pendingMu.Lock()
+	c.pending[id] = respCh
+	c.pendingMu.Unlock()
+	defer c.removePending(id)
+
 	c.writeMu.Lock()
 	_, err = c.stdin.Write(data)
 	c.writeMu.Unlock()
@@ -91,92 +100,112 @@ func (c *Client) sendRecv(method string, params, result any) error {
 		return fmt.Errorf("acp: write request: %w", err)
 	}
 
-	// Read response lines until we find one matching our ID
-	for {
-		line, readErr := c.stdout.ReadBytes('\n')
-		if len(line) == 0 {
-			if readErr != nil {
-				return fmt.Errorf("acp: connection closed")
-			}
-			continue
+	select {
+	case resp := <-respCh:
+		if resp.err != nil {
+			return resp.err
 		}
-		// Trim trailing newline; still process the frame even if EOF followed.
-		if line[len(line)-1] == '\n' {
-			line = line[:len(line)-1]
-		}
-		if len(line) > 0 && line[len(line)-1] == '\r' {
-			line = line[:len(line)-1]
-		}
-		if len(line) == 0 {
-			if readErr != nil {
-				return fmt.Errorf("acp: connection closed")
-			}
-			continue
-		}
-
-		var raw struct {
-			ID     any             `json:"id"`
-			Method string          `json:"method"`
-			Result json.RawMessage `json:"result,omitempty"`
-			Error  *jsonrpcError   `json:"error,omitempty"`
-		}
-		if err := json.Unmarshal(line, &raw); err != nil {
-			if readErr != nil {
-				return fmt.Errorf("acp: connection closed")
-			}
-			continue
-		}
-
-		// Handle notifications (no ID)
-		if raw.ID == nil {
-			if c.onNotification != nil {
-				// Re-extract params for notification
-				var notifRaw struct {
-					Method string          `json:"method"`
-					Params json.RawMessage `json:"params"`
-				}
-				if json.Unmarshal(line, &notifRaw) == nil {
-					c.onNotification(notifRaw.Method, notifRaw.Params)
-				}
-			}
-			if readErr != nil {
-				return fmt.Errorf("acp: connection closed")
-			}
-			continue
-		}
-
-		// Convert id to match
-		var respID int64
-		switch v := raw.ID.(type) {
-		case float64:
-			respID = int64(v)
-		case int64:
-			respID = v
-		default:
-			if readErr != nil {
-				return fmt.Errorf("acp: connection closed")
-			}
-			continue
-		}
-
-		if respID != id {
-			if readErr != nil {
-				return fmt.Errorf("acp: connection closed")
-			}
-			continue
-		}
-
-		if raw.Error != nil {
-			return fmt.Errorf("acp: %s", raw.Error.Message)
-		}
-
-		if result != nil && raw.Result != nil {
-			if err := json.Unmarshal(raw.Result, result); err != nil {
+		if result != nil && resp.result != nil {
+			if err := json.Unmarshal(resp.result, result); err != nil {
 				return fmt.Errorf("acp: unmarshal result: %w", err)
 			}
 		}
 		return nil
+	case <-c.closed:
+		return fmt.Errorf("acp: connection closed")
 	}
+}
+
+func (c *Client) readLoop(stdout io.Reader) {
+	reader := bufio.NewReaderSize(stdout, 64*1024)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			c.handleFrame(trimFrame(line))
+		}
+		if readErr != nil {
+			c.closePending(fmt.Errorf("acp: connection closed"))
+			return
+		}
+	}
+}
+
+func trimFrame(line []byte) []byte {
+	if len(line) > 0 && line[len(line)-1] == '\n' {
+		line = line[:len(line)-1]
+	}
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
+	return line
+}
+
+func (c *Client) handleFrame(line []byte) {
+	if len(line) == 0 {
+		return
+	}
+	var raw struct {
+		ID     any             `json:"id"`
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params,omitempty"`
+		Result json.RawMessage `json:"result,omitempty"`
+		Error  *jsonrpcError   `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal(line, &raw); err != nil {
+		return
+	}
+	if raw.ID == nil {
+		if c.onNotification != nil {
+			c.onNotification(raw.Method, raw.Params)
+		}
+		return
+	}
+	respID, ok := responseID(raw.ID)
+	if !ok {
+		return
+	}
+	resp := clientResponse{result: raw.Result}
+	if raw.Error != nil {
+		resp.err = fmt.Errorf("acp: %s", raw.Error.Message)
+	}
+	c.pendingMu.Lock()
+	ch := c.pending[respID]
+	c.pendingMu.Unlock()
+	if ch != nil {
+		ch <- resp
+	}
+}
+
+func responseID(id any) (int64, bool) {
+	switch v := id.(type) {
+	case float64:
+		return int64(v), true
+	case int64:
+		return v, true
+	case json.Number:
+		n, err := v.Int64()
+		return n, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func (c *Client) removePending(id int64) {
+	c.pendingMu.Lock()
+	delete(c.pending, id)
+	c.pendingMu.Unlock()
+}
+
+func (c *Client) closePending(err error) {
+	c.closeOnce.Do(func() {
+		close(c.closed)
+		c.pendingMu.Lock()
+		defer c.pendingMu.Unlock()
+		for id, ch := range c.pending {
+			ch <- clientResponse{err: err}
+			delete(c.pending, id)
+		}
+	})
 }
 
 // SendNotification sends a JSON-RPC notification (no response expected).
@@ -327,31 +356,21 @@ func (c *Client) CancelSession(sessionID SessionID) error {
 // The channel is closed when the reader encounters an error or EOF.
 func (c *Client) ReceiveSessionUpdates(ctx any) <-chan SessionUpdate {
 	ch := make(chan SessionUpdate, 64)
-	go func() {
-		defer close(ch)
-		for {
-			line, err := c.stdout.ReadBytes('\n')
-			if len(line) > 0 {
-				if line[len(line)-1] == '\n' {
-					line = line[:len(line)-1]
-				}
-				if len(line) > 0 && line[len(line)-1] == '\r' {
-					line = line[:len(line)-1]
-				}
-				if len(line) > 0 {
-					var raw struct {
-						Method string              `json:"method"`
-						Params SessionNotification `json:"params"`
-					}
-					if json.Unmarshal(line, &raw) == nil && raw.Method == "session/update" {
-						ch <- raw.Params.Update
-					}
-				}
-			}
-			if err != nil {
-				return
+	c.OnNotification(func(method string, params json.RawMessage) {
+		if method != "session/update" {
+			return
+		}
+		var n SessionNotification
+		if json.Unmarshal(params, &n) == nil {
+			select {
+			case ch <- n.Update:
+			default:
 			}
 		}
+	})
+	go func() {
+		<-c.closed
+		close(ch)
 	}()
 	return ch
 }
@@ -375,5 +394,6 @@ func (c *Client) Close() error {
 			err = closeErr
 		}
 	}
+	c.closePending(fmt.Errorf("acp: connection closed"))
 	return err
 }
