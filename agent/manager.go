@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -88,10 +90,17 @@ type captureWriter struct {
 	sb strings.Builder
 }
 
-func (w *captureWriter) Write(s string, done bool) error {
-	w.sb.WriteString(s)
+func (w *captureWriter) AssistantDelta(text string) error { w.sb.WriteString(text); return nil }
+func (w *captureWriter) ThoughtDelta(text string) error   { return nil }
+func (w *captureWriter) ToolCallStart(event ToolCallEvent) error {
 	return nil
 }
+func (w *captureWriter) ToolCallDone(event ToolCallEvent) error {
+	return nil
+}
+func (w *captureWriter) SessionInfo(event SessionInfoEvent) error { return nil }
+func (w *captureWriter) Usage(event UsageEvent) error             { return nil }
+func (w *captureWriter) Done() error                              { return nil }
 
 func (m *Manager) RunAgent(ctx context.Context, name, prompt string) (string, error) {
 	ag, err := m.UseAgent(name)
@@ -177,39 +186,140 @@ func (m *Manager) Prompt(ctx context.Context, req *acp.PromptRequest, sender acp
 	}
 	prompt := strings.Join(textParts, "\n")
 	sess.AppendRequest(prompt)
+	if sess.Title == "" {
+		sess.Title = sess.DisplayTitle()
+	}
 
 	ag, err := m.UseAgent(agentName)
 	if err != nil {
 		return nil, fmt.Errorf("use agent: %w", err)
 	}
 
-	writer := &acpWriter{sessionID: req.SessionID, sender: sender}
-	if err := ag.RunAgentLoop(ctx, sess, writer); err != nil {
+	sink := &acpSink{sessionID: req.SessionID, sender: sender}
+	if sess.Title != "" {
+		if err := sink.SessionInfo(SessionInfoEvent{Title: sess.Title}); err != nil {
+			return nil, err
+		}
+	}
+	if err := ag.RunAgentLoop(ctx, sess, sink); err != nil {
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
 
 	return &acp.PromptResponse{StopReason: acp.StopEndTurn}, nil
 }
 
-type acpWriter struct {
+type acpSink struct {
 	sessionID acp.SessionID
 	sender    acp.SessionUpdateSender
 }
 
-func (w *acpWriter) Write(s string, done bool) error {
-	if s != "" {
-		return w.sender.Send(acp.SessionUpdate{
-			SessionUpdate: "agent_message_chunk",
-			Content:       acp.ContentBlock{Type: "text", Text: s},
-		})
+func (s *acpSink) AssistantDelta(text string) error {
+	if text == "" {
+		return nil
 	}
-	if done {
-		return w.sender.Send(acp.SessionUpdate{
-			SessionUpdate: "usage_update",
-			Usage:         &acp.UsageUpdate{},
-		})
+	return s.sender.Send(acp.SessionUpdate{
+		SessionUpdate: "agent_message_chunk",
+		Content:       acp.ContentBlock{Type: "text", Text: text},
+	})
+}
+
+func (s *acpSink) ThoughtDelta(text string) error {
+	if text == "" {
+		return nil
 	}
+	return s.sender.Send(acp.SessionUpdate{
+		SessionUpdate: "agent_thought_chunk",
+		Thought:       text,
+	})
+}
+
+func (s *acpSink) ToolCallStart(event ToolCallEvent) error {
+	return s.sender.Send(acp.SessionUpdate{
+		SessionUpdate: "tool_call",
+		ToolCall:      acpToolCall(event),
+	})
+}
+
+func (s *acpSink) ToolCallDone(event ToolCallEvent) error {
+	status := acp.ToolCallCompleted
+	if event.Status == "failed" {
+		status = acp.ToolCallFailed
+	}
+	return s.sender.Send(acp.SessionUpdate{
+		SessionUpdate:  "tool_call_update",
+		ToolCallUpdate: acpToolCallUpdate(event, status),
+	})
+}
+
+func (s *acpSink) SessionInfo(event SessionInfoEvent) error {
+	if event.Title == "" {
+		return nil
+	}
+	return s.sender.Send(acp.SessionUpdate{
+		SessionUpdate: "session_info_update",
+		SessionInfo:   &acp.SessionInfoUpdate{Title: &event.Title},
+	})
+}
+
+func (s *acpSink) Usage(event UsageEvent) error {
+	return s.sender.Send(acp.SessionUpdate{
+		SessionUpdate: "usage_update",
+		Usage:         &acp.UsageUpdate{},
+	})
+}
+
+func (s *acpSink) Done() error {
 	return nil
+}
+
+func toolTitle(event ToolCallEvent) string {
+	if event.Name == "" {
+		return "Tool call"
+	}
+	return event.Name
+}
+
+func acpToolCall(event ToolCallEvent) *acp.ToolCall {
+	return &acp.ToolCall{
+		ToolCallID: acp.ToolCallID(event.ID),
+		Title:      toolTitle(event),
+		Kind:       toolKind(event.Name),
+		Status:     acp.ToolCallInProgress,
+		Content: []acp.ToolCallContent{{
+			Type:    "content",
+			Content: &acp.ContentBlock{Type: "text", Text: event.Arguments},
+		}},
+		RawInput: json.RawMessage(strconv.Quote(event.Arguments)),
+	}
+}
+
+func acpToolCallUpdate(event ToolCallEvent, status acp.ToolCallStatus) *acp.ToolCallUpdate {
+	return &acp.ToolCallUpdate{
+		ToolCallID: acp.ToolCallID(event.ID),
+		Status:     &status,
+		Content: []acp.ToolCallContent{{
+			Type:    "content",
+			Content: &acp.ContentBlock{Type: "text", Text: event.Result},
+		}},
+		RawOutput: json.RawMessage(strconv.Quote(event.Result)),
+	}
+}
+
+func toolKind(name string) acp.ToolKind {
+	switch {
+	case strings.Contains(name, "read"):
+		return acp.ToolKindRead
+	case strings.Contains(name, "write"), strings.Contains(name, "append"), strings.Contains(name, "edit"):
+		return acp.ToolKindEdit
+	case strings.Contains(name, "exec"):
+		return acp.ToolKindExecute
+	case strings.Contains(name, "search"):
+		return acp.ToolKindSearch
+	case strings.Contains(name, "fetch"):
+		return acp.ToolKindFetch
+	default:
+		return acp.ToolKindOther
+	}
 }
 
 func (m *Manager) LoadSession(ctx context.Context, req *acp.LoadSessionRequest, sender acp.SessionUpdateSender) (*acp.LoadSessionResponse, error) {
@@ -224,24 +334,72 @@ func (m *Manager) LoadSession(ctx context.Context, req *acp.LoadSessionRequest, 
 }
 
 func replaySession(sess *session.Session, sender acp.SessionUpdateSender) error {
+	toolResults := map[string]openai.ChatCompletionMessage{}
 	for _, msg := range sess.Messages {
-		if strings.TrimSpace(msg.Content) == "" {
-			continue
+		if msg.Role == openai.RoleTool && msg.ToolCallID != "" {
+			toolResults[msg.ToolCallID] = msg
 		}
-		updateType := ""
+	}
+
+	for _, msg := range sess.Messages {
 		switch msg.Role {
 		case openai.RoleUser:
-			updateType = "user_message_chunk"
+			if strings.TrimSpace(msg.Content) == "" {
+				continue
+			}
+			if err := sender.Send(acp.SessionUpdate{
+				SessionUpdate: "user_message_chunk",
+				Content:       acp.ContentBlock{Type: "text", Text: msg.Content},
+			}); err != nil {
+				return err
+			}
 		case openai.RoleAssistant:
-			updateType = "agent_message_chunk"
+			if strings.TrimSpace(msg.ReasoningContent) != "" {
+				if err := sender.Send(acp.SessionUpdate{
+					SessionUpdate: "agent_thought_chunk",
+					Thought:       msg.ReasoningContent,
+				}); err != nil {
+					return err
+				}
+			}
+			if strings.TrimSpace(msg.Content) != "" {
+				if err := sender.Send(acp.SessionUpdate{
+					SessionUpdate: "agent_message_chunk",
+					Content:       acp.ContentBlock{Type: "text", Text: msg.Content},
+				}); err != nil {
+					return err
+				}
+			}
+			for _, tc := range msg.ToolCalls {
+				event := ToolCallEvent{
+					ID:        tc.ID,
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+					Status:    "in_progress",
+					Call:      tc,
+				}
+				if result, ok := toolResults[tc.ID]; ok {
+					event.Result = result.Content
+					event.Status = "completed"
+				}
+				if err := sender.Send(acp.SessionUpdate{
+					SessionUpdate: "tool_call",
+					ToolCall:      acpToolCall(event),
+				}); err != nil {
+					return err
+				}
+				if event.Result != "" {
+					status := acp.ToolCallCompleted
+					if err := sender.Send(acp.SessionUpdate{
+						SessionUpdate:  "tool_call_update",
+						ToolCallUpdate: acpToolCallUpdate(event, status),
+					}); err != nil {
+						return err
+					}
+				}
+			}
 		default:
 			continue
-		}
-		if err := sender.Send(acp.SessionUpdate{
-			SessionUpdate: updateType,
-			Content:       acp.ContentBlock{Type: "text", Text: msg.Content},
-		}); err != nil {
-			return err
 		}
 	}
 	return sender.Send(acp.SessionUpdate{

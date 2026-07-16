@@ -196,15 +196,51 @@ type stdoutWriter struct {
 	md *MarkdownRenderer
 }
 
-func (w *stdoutWriter) Write(s string, done bool) error {
+func (w *stdoutWriter) AssistantDelta(s string) error {
 	if w.md == nil {
 		w.md = NewMarkdownRenderer(os.Stdout)
 	}
 	w.md.Write(s)
-	if done {
-		w.md.Flush()
-		fmt.Println()
+	return nil
+}
+
+func (w *stdoutWriter) ThoughtDelta(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return nil
 	}
+	if w.md != nil {
+		w.md.Flush()
+	}
+	fmt.Printf("\n[thought] %s\n", s)
+	return nil
+}
+
+func (w *stdoutWriter) ToolCallStart(event agent.ToolCallEvent) error {
+	if w.md != nil {
+		w.md.Flush()
+	}
+	fmt.Printf("\n[tool] %s(%s)\n", event.Name, event.Arguments)
+	return nil
+}
+
+func (w *stdoutWriter) ToolCallDone(event agent.ToolCallEvent) error {
+	fmt.Printf("[tool:%s] %s\n", event.Status, event.Result)
+	return nil
+}
+
+func (w *stdoutWriter) SessionInfo(event agent.SessionInfoEvent) error {
+	return nil
+}
+
+func (w *stdoutWriter) Usage(event agent.UsageEvent) error {
+	return nil
+}
+
+func (w *stdoutWriter) Done() error {
+	if w.md != nil {
+		w.md.Flush()
+	}
+	fmt.Println()
 	return nil
 }
 

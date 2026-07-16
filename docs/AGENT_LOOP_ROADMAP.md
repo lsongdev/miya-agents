@@ -6,9 +6,9 @@ This note tracks the next miya-agents architecture changes needed for a richer A
 
 The current loop is intentionally simple:
 
-- `agent.Agent.RunAgentLoop` streams assistant text through `Writer.Write(string, done)`.
+- `agent.Agent.RunAgentLoop` emits structured events through `EventSink`.
 - Tool calls are executed after the assistant message is fully assembled.
-- Tool execution is rendered back as markdown text.
+- Tool execution is emitted as structured events for transports such as ACP and CLI.
 - Session files persist OpenAI chat messages only.
 - ACP replay reconstructs only user and assistant text chunks.
 
@@ -27,7 +27,7 @@ Clients such as opencode ACP distinguish:
 - usage/context updates
 - session info updates
 
-miya-agents currently collapses tool activity into markdown text. That loses structure for desktop UI, channel adapters, replay, and future analytics.
+miya-agents now emits structured tool activity at runtime. The remaining gap is durable event persistence for exact replay and analytics.
 
 ### Session History
 
@@ -67,7 +67,7 @@ ACP, CLI stdout, and future channels should each adapt this event stream to thei
 - Channel sinks can chunk/format content safely.
 - A recording sink persists display events in the session file.
 
-The old `Writer` can be kept as a compatibility adapter during migration.
+The old string-only `Writer` path has been removed. New transports should implement `EventSink` directly.
 
 ## Session File Evolution
 
@@ -142,12 +142,10 @@ This should be an agent operation, not a normal user-visible tool by default. Ex
 
 1. Add session metadata fields: `title`, `updated_at`, `summary`.
 2. Return title/updatedAt from `session/list`.
-3. Introduce `EventSink` and adapt existing `Writer`.
-4. Emit structured ACP tool call events around local tool execution.
-5. Persist replayable session events.
-6. Add title generation after first turn.
-7. Add manual compaction command.
-8. Add automatic compaction threshold.
+3. Persist replayable session events.
+4. Add title generation after first turn.
+5. Add manual compaction command.
+6. Add automatic compaction threshold.
 
 ## Notes
 

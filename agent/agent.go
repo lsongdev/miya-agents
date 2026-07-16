@@ -12,10 +12,6 @@ import (
 	"github.com/lsongdev/miya-agents/tools"
 )
 
-type Writer interface {
-	Write(s string, done bool) error
-}
-
 type Agent struct {
 	Name   string
 	Config *config.ProfileConfig
@@ -25,7 +21,7 @@ type Agent struct {
 	toolsDefs []openai.ToolDef
 }
 
-func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, output Writer) error {
+func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink EventSink) error {
 	for {
 		req := openai.ChatCompletionRequest{
 			Model:    a.Config.ModelName,
@@ -50,7 +46,16 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, output 
 					continue
 				}
 				builder.Update(*m)
-				output.Write(m.Content, false)
+				if m.ReasoningContent != "" {
+					if err := sink.ThoughtDelta(m.ReasoningContent); err != nil {
+						return err
+					}
+				}
+				if m.Content != "" {
+					if err := sink.AssistantDelta(m.Content); err != nil {
+						return err
+					}
+				}
 			}
 			respMessage = builder.Build()
 		} else {
@@ -64,13 +69,27 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, output 
 				return fmt.Errorf("no message in response")
 			}
 			respMessage = *m
-			output.Write(respMessage.Content, false)
+			if respMessage.ReasoningContent != "" {
+				if err := sink.ThoughtDelta(respMessage.ReasoningContent); err != nil {
+					return err
+				}
+			}
+			if respMessage.Content != "" {
+				if err := sink.AssistantDelta(respMessage.Content); err != nil {
+					return err
+				}
+			}
 		}
 		sess.AppendResponse(respMessage)
 		// finish
 		if !respMessage.HasToolCall() {
 			sess.SaveMessages()
-			output.Write("", true)
+			if err := sink.Usage(UsageEvent{}); err != nil {
+				return err
+			}
+			if err := sink.Done(); err != nil {
+				return err
+			}
 			return nil
 		}
 		// Execute tool calls
@@ -80,12 +99,34 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, output 
 			}
 			tool, ok := a.toolsMap[tc.Function.Name]
 			var result string
+			if err := sink.ToolCallStart(ToolCallEvent{
+				ID:        tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+				Status:    "in_progress",
+				Call:      tc,
+			}); err != nil {
+				return err
+			}
 			if ok {
 				result = tool.Run(ctx, tc.Function.Arguments)
 			} else {
 				result = fmt.Sprintf("Error: unknown tool '%s'", tc.Function.Name)
 			}
-			output.Write(fmt.Sprintf("\n```shell\n$ %s(%s)\n> %s\n```\n", tc.Function.Name, tc.Function.Arguments, result), false)
+			status := "completed"
+			if !ok {
+				status = "failed"
+			}
+			if err := sink.ToolCallDone(ToolCallEvent{
+				ID:        tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+				Result:    result,
+				Status:    status,
+				Call:      tc,
+			}); err != nil {
+				return err
+			}
 			sess.Messages = append(sess.Messages, openai.ToolResultMessage(tc.ID, tc.Function.Name, result))
 		}
 		sess.SaveMessages()
