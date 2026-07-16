@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/lsongdev/miya-agents/openai"
@@ -17,15 +18,28 @@ type SkillsTool struct {
 }
 
 func (t *SkillsTool) reloadSkillsFromDirectory() (err error) {
-	t.skills = map[string]*skills.Skill{}
+	t.skills = builtinSkills()
 	files, err := skills.LoadSkillsFromDirectory(t.Workspace)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return
 	}
 	for _, skill := range files {
 		t.skills[skill.Name] = skill
 	}
 	return
+}
+
+func builtinSkills() map[string]*skills.Skill {
+	return map[string]*skills.Skill{
+		"session-maintenance": {
+			Name:        "session-maintenance",
+			Description: "Compact or update a miya session JSON file when context is low.",
+			Prompt:      strings.TrimSpace(`When a miya session maintenance notice appears, read the referenced ~/.miya/sessions/<id>.json file, compact older messages into one concise system summary, update title/summary/compactions when useful, preserve recent active context, and never modify events.`),
+		},
+	}
 }
 
 // Def returns the tool definition.
@@ -59,12 +73,13 @@ func (t *SkillsTool) Run(ctx context.Context, args string) string {
 	if err := json.Unmarshal([]byte(args), &a); err != nil {
 		return fmt.Sprintf("Error: failed to parse arguments: %v", err)
 	}
-	// If no name provided, list all skills
-	if a.Name == "" {
-		err := t.reloadSkillsFromDirectory()
-		if err != nil {
+	if t.skills == nil {
+		if err := t.reloadSkillsFromDirectory(); err != nil {
 			return fmt.Sprintf("Error: failed to load skills: %v", err)
 		}
+	}
+	// If no name provided, list all skills
+	if a.Name == "" {
 		if len(t.skills) == 0 {
 			return "No skills registered."
 		}

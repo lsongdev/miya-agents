@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/lsongdev/miya-agents/config"
 	"github.com/lsongdev/miya-agents/openai"
@@ -87,6 +86,7 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 			if err := sink.Usage(UsageEvent{}); err != nil {
 				return err
 			}
+			a.AppendContextMaintenanceNotice(sess)
 			sess.SaveMessages()
 			if err := sink.Done(); err != nil {
 				return err
@@ -109,16 +109,10 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 			}); err != nil {
 				return err
 			}
-			titleBefore := sess.Title
 			if ok {
 				result = tool.Run(ctx, tc.Function.Arguments)
 			} else {
 				result = fmt.Sprintf("Error: unknown tool '%s'", tc.Function.Name)
-			}
-			if sess.Title != "" && sess.Title != titleBefore {
-				if err := sink.SessionInfo(SessionInfoEvent{Title: sess.Title}); err != nil {
-					return err
-				}
 			}
 			status := "completed"
 			if !ok {
@@ -144,13 +138,6 @@ func (a *Agent) AddTool(tool openai.Tool) {
 	d := tool.Def()
 	a.toolsMap[d.Function.Name] = tool
 	a.toolsDefs = append(a.toolsDefs, d)
-}
-
-func (a *Agent) AddSessionTools(sess *session.Session, runner tools.AgentRunner) {
-	for _, tool := range tools.NewSessionTools(sess, runner) {
-		a.AddTool(tool)
-	}
-	a.ensureInternalToolInstructions(sess)
 }
 
 func (a *Agent) NewSession() *session.Session {
@@ -180,22 +167,6 @@ func (a *Agent) readSystemPrompt() string {
 		return "You are a helpful assistant."
 	}
 	return string(data)
-}
-
-func (a *Agent) ensureInternalToolInstructions(sess *session.Session) {
-	if len(sess.Messages) == 0 || sess.Messages[0].Role != openai.RoleSystem {
-		sess.Messages = append([]openai.ChatCompletionMessage{openai.SystemMessage(a.readSystemPrompt())}, sess.Messages...)
-	}
-	if strings.Contains(sess.Messages[0].Content, "Internal session tools:") {
-		return
-	}
-	sess.Messages[0].Content = strings.TrimSpace(sess.Messages[0].Content) + `
-
-Internal session tools:
-- Use rename_session once when the user's goal is clear and the session title is empty or generic. Titles must be short, plain text, and user-facing.
-- Use summarize_session when durable decisions, current task state, important files, TODOs, or user preferences should be preserved for later turns.
-- Use compact_context when the conversation is getting long. Preserve user goals, decisions, constraints, changed files, important command results, unresolved TODOs, and user preferences.
-- These tools update session metadata/model context only. Do not mention them unless the user asks about session management.`
 }
 
 func (a *Agent) BuildTools() {

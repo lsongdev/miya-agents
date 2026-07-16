@@ -12,7 +12,7 @@ The current loop is intentionally simple:
 - Session files persist OpenAI chat messages for model context and ACP session events for UI replay.
 - ACP replay sends the persisted event log in order.
 
-This works for basic structured replay. The remaining gaps are richer event types, automatic compaction thresholds, and better generated metadata quality.
+This works for basic structured replay. The remaining gaps are richer event types, session-maintenance skill guidance, and better generated metadata quality.
 
 ## Problem Areas
 
@@ -35,11 +35,11 @@ Session files now keep `[]openai.ChatCompletionMessage` and `[]session.Event` se
 
 ### Context Compaction
 
-Long-running sessions need a way to reduce old context while keeping task continuity. miya-agents exposes this as controlled internal tools, so the model can decide when session maintenance is useful while the runtime still owns the actual mutation boundaries.
+Long-running sessions need a way to reduce old context while keeping task continuity. miya-agents keeps runtime behavior minimal: when the estimated context window is nearly full, it appends a short system notice with the session id/path so the next model turn can use a session-maintenance skill to compact the session JSON.
 
 ### Session Titles
 
-Using the session ID as the visible title is poor UX. The current fallback is the first user message, and `rename_session` lets the model update the title once the goal is clear.
+Using the session ID as the visible title is poor UX. The current fallback is the first user message; richer title and summary updates can be handled by session-maintenance skills editing session metadata.
 
 ## Target Architecture
 
@@ -98,24 +98,21 @@ Guidelines:
 
 ## Context Compaction
 
-Add compaction as an explicit internal session operation.
+Add compaction as a skill-guided session file operation.
 
 Initial implementation:
 
-1. Select older messages beyond a configurable recent window.
-2. Ask the configured model to summarize durable facts, decisions, files touched, open tasks, and user preferences.
-3. Replace the selected message range with one synthetic system/developer message containing the summary.
-4. Store the summary in `session.summary`.
-5. Append a compaction record for auditability.
+1. Runtime estimates current message size against the configured context window.
+2. If the remaining window is below the warning threshold, append one short maintenance notice to `messages`.
+3. The notice includes the session id and `~/.miya/sessions/<id>.json`.
+4. A session-maintenance skill describes how to compact `messages`, update `summary/title/compactions`, and leave `events` unchanged.
 
 Current and potential entry points:
 
-- Internal tool: `compact_context`
-- Internal tool: `summarize_session`
-- Internal tool: `rename_session`
+- Context pressure notice appended by runtime.
+- Session-maintenance skill invoked by the model.
 - Future CLI command: `miya sessions compact <id>`
 - ACP method or command if the protocol surface supports it later
-- Automatic threshold: compact when estimated token usage exceeds a configured limit
 
 Avoid silently rewriting active sessions without recording the compaction.
 
@@ -132,22 +129,20 @@ Medium term:
 - Emit `session_info_update` so clients update the row immediately.
 - Save the generated title to the session file.
 
-Current internal tools:
+Current approach:
 
-- `rename_session` updates `session.title`; the agent loop emits and records a replayable `session_info_update` when it observes the title change.
-- `summarize_session` calls a summarizer profile when configured, falling back to the current profile, then updates `session.summary`.
-- `compact_context` summarizes older messages, replaces them with a synthetic system summary, updates `session.summary`, and appends a compaction audit record.
-
-These are model-callable tools, but they are intentionally narrow. The model provides intent and summary content through a summarizer agent; the runtime decides the exact message range, preserves recent active tool calls, and never mutates `events`.
+- Runtime does not provide dedicated metadata tools.
+- Skills document the exact JSON edits for `title`, `summary`, `messages`, and `compactions`.
+- Skills must preserve recent active context and never mutate `events`.
 
 ## Suggested Order
 
 1. Add session metadata fields: `title`, `updated_at`, `summary`. Done.
 2. Return title/updatedAt from `session/list`. Done.
 3. Persist replayable session events. Done.
-4. Add controlled internal tools for title, summary, and compaction. Done.
-5. Add manual compaction command.
-6. Add automatic compaction threshold.
+4. Add context pressure notice. Done.
+5. Add session-maintenance skill.
+6. Add manual compaction command if the skill-based flow is not enough.
 
 ## Notes
 

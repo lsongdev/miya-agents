@@ -169,17 +169,6 @@ func (s *Session) AppendEvent(update acp.SessionUpdate) {
 	})
 }
 
-func (s *Session) AppendCompaction(messageStart, messageEnd, keepRecent int, summary string) {
-	s.Compactions = append(s.Compactions, Compaction{
-		ID:           fmt.Sprintf("cmp_%06d", len(s.Compactions)+1),
-		CreatedAt:    time.Now(),
-		MessageStart: messageStart,
-		MessageEnd:   messageEnd,
-		KeepRecent:   keepRecent,
-		Summary:      summary,
-	})
-}
-
 // SaveMessages writes the session (including metadata) to disk.
 // Name kept for backwards compatibility with the agent loop.
 func (s *Session) SaveMessages() {
