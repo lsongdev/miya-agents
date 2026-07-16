@@ -2,7 +2,6 @@ package agent
 
 import (
 	"encoding/json"
-	"strconv"
 	"strings"
 
 	"github.com/lsongdev/miya-agents/acp"
@@ -184,7 +183,7 @@ func acpToolCall(event ToolCallEvent) *acp.ToolCall {
 			Type:    "content",
 			Content: &acp.ContentBlock{Type: "text", Text: event.Arguments},
 		}},
-		RawInput: json.RawMessage(strconv.Quote(event.Arguments)),
+		RawInput: rawJSONValue(event.Arguments),
 	}
 }
 
@@ -196,8 +195,20 @@ func acpToolCallUpdate(event ToolCallEvent, status acp.ToolCallStatus) *acp.Tool
 			Type:    "content",
 			Content: &acp.ContentBlock{Type: "text", Text: event.Result},
 		}},
-		RawOutput: json.RawMessage(strconv.Quote(event.Result)),
+		RawOutput: rawJSONValue(event.Result),
 	}
+}
+
+func rawJSONValue(value string) json.RawMessage {
+	trimmed := strings.TrimSpace(value)
+	if trimmed != "" && json.Valid([]byte(trimmed)) {
+		return json.RawMessage(trimmed)
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return json.RawMessage(`""`)
+	}
+	return data
 }
 
 func toolKind(name string) acp.ToolKind {

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/lsongdev/miya-agents/acp"
@@ -97,5 +98,27 @@ func TestReplaySessionReplaysEventLog(t *testing.T) {
 	}
 	if sender.updates[2].ToolCallUpdate == nil || sender.updates[2].ToolCallUpdate.ToolCallID != "call-1" {
 		t.Fatal("missing replayed tool_call_update update")
+	}
+}
+
+func TestToolCallRawJSONValueMarshalsJSONSafely(t *testing.T) {
+	call := acpToolCall(ToolCallEvent{ID: "call-raw", Name: "exec", Arguments: `{"command":"yt-dlp -x"}`})
+	if !json.Valid(call.RawInput) {
+		t.Fatalf("raw input is invalid JSON: %s", call.RawInput)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(call.RawInput, &raw); err != nil {
+		t.Fatalf("raw input unmarshal: %v", err)
+	}
+	if got := raw["command"]; got != "yt-dlp -x" {
+		t.Fatalf("command = %#v", got)
+	}
+
+	update := toolCallDoneUpdate(ToolCallEvent{ID: "call-raw", Result: `bad \x escape from tool output`})
+	if _, err := json.Marshal(update); err != nil {
+		t.Fatalf("marshal update with raw output: %v", err)
+	}
+	if !json.Valid(update.ToolCallUpdate.RawOutput) {
+		t.Fatalf("raw output is invalid JSON: %s", update.ToolCallUpdate.RawOutput)
 	}
 }
