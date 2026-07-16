@@ -164,6 +164,7 @@ func runCommand(args []string) {
 	}
 
 	output := &stdoutWriter{}
+	sink := agent.NewRecordingSink(sess, output)
 	ctx := context.Background()
 	rl := New("> ")
 
@@ -186,7 +187,21 @@ func runCommand(args []string) {
 			return
 		}
 		sess.AppendRequest(line)
-		if err := ag.RunAgentLoop(ctx, sess, output); err != nil {
+		agent.RecordUserMessage(sess, line)
+		if sess.Title == "" {
+			sess.Title = sess.DisplayTitle()
+			if sess.Title != "" {
+				if err := sink.SessionInfo(agent.SessionInfoEvent{Title: sess.Title}); err != nil {
+					fmt.Printf("Error: %v\n", err)
+					continue
+				}
+			}
+		}
+		if err := sess.Save(); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			continue
+		}
+		if err := ag.RunAgentLoop(ctx, sess, sink); err != nil {
 			fmt.Printf("Error: %v\n", err)
 		}
 	}

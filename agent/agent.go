@@ -83,10 +83,10 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 		sess.AppendResponse(respMessage)
 		// finish
 		if !respMessage.HasToolCall() {
-			sess.SaveMessages()
 			if err := sink.Usage(UsageEvent{}); err != nil {
 				return err
 			}
+			sess.SaveMessages()
 			if err := sink.Done(); err != nil {
 				return err
 			}

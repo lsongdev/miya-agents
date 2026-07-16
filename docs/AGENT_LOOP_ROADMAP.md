@@ -9,10 +9,10 @@ The current loop is intentionally simple:
 - `agent.Agent.RunAgentLoop` emits structured events through `EventSink`.
 - Tool calls are executed after the assistant message is fully assembled.
 - Tool execution is emitted as structured events for transports such as ACP and CLI.
-- Session files persist OpenAI chat messages only.
-- ACP replay reconstructs only user and assistant text chunks.
+- Session files persist OpenAI chat messages for model context and ACP session events for UI replay.
+- ACP replay sends the persisted event log in order.
 
-This works for basic chat, but it cannot faithfully represent structured agent activity such as thoughts, tool calls, plans, or session metadata updates.
+This works for basic structured replay. The remaining gaps are richer event types, context compaction, and generated metadata.
 
 ## Problem Areas
 
@@ -27,11 +27,11 @@ Clients such as opencode ACP distinguish:
 - usage/context updates
 - session info updates
 
-miya-agents now emits structured tool activity at runtime. The remaining gap is durable event persistence for exact replay and analytics.
+miya-agents now emits structured tool activity at runtime and records ACP-shaped session updates for exact replay. The next gap is broadening the event vocabulary to plan updates, richer usage information, permissions, and future channel-specific metadata.
 
 ### Session History
 
-Session files only contain `[]openai.ChatCompletionMessage`. This is sufficient for model context, but not sufficient for UI replay. If the runtime emits structured events, those events need to be stored separately from model messages.
+Session files now keep `[]openai.ChatCompletionMessage` and `[]session.Event` separately. `messages` remains the mutable model context. `events` is the append-only display protocol history used by ACP replay.
 
 ### Context Compaction
 
@@ -91,11 +91,10 @@ Guidelines:
 
 - `messages` remains the source for model context.
 - `events` is the source for ACP/UI replay.
+- Replay must not reconstruct UI history from model messages.
 - `title` is short and user-facing.
 - `summary` is the latest durable conversation summary.
 - `compactions` records what was replaced and when.
-
-Keep backward compatibility when loading old sessions by treating missing fields as empty.
 
 ## Context Compaction
 

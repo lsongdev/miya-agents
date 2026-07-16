@@ -10,9 +10,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lsongdev/miya-agents/acp"
 	"github.com/lsongdev/miya-agents/config"
 	"github.com/lsongdev/miya-agents/openai"
 )
+
+type Event struct {
+	ID        string            `json:"id"`
+	CreatedAt time.Time         `json:"created_at"`
+	Update    acp.SessionUpdate `json:"update"`
+}
 
 type Session struct {
 	ID        string                         `json:"id"`
@@ -21,6 +28,7 @@ type Session struct {
 	CreatedAt time.Time                      `json:"created_at"`
 	UpdatedAt time.Time                      `json:"updated_at,omitempty"`
 	Messages  []openai.ChatCompletionMessage `json:"messages"`
+	Events    []Event                        `json:"events"`
 }
 
 func sessionsDir() string {
@@ -50,6 +58,7 @@ func New(agentName string) *Session {
 		AgentName: agentName,
 		CreatedAt: time.Now(),
 		Messages:  []openai.ChatCompletionMessage{},
+		Events:    []Event{},
 	}
 }
 
@@ -65,6 +74,12 @@ func Load(id string) (*Session, error) {
 	}
 	if s.ID == "" {
 		s.ID = id
+	}
+	if s.Messages == nil {
+		s.Messages = []openai.ChatCompletionMessage{}
+	}
+	if s.Events == nil {
+		s.Events = []Event{}
 	}
 	return &s, nil
 }
@@ -132,6 +147,14 @@ func (s *Session) AppendResponse(response openai.ChatCompletionMessage) {
 	s.Messages = append(s.Messages, response)
 }
 
+func (s *Session) AppendEvent(update acp.SessionUpdate) {
+	s.Events = append(s.Events, Event{
+		ID:        fmt.Sprintf("evt_%06d", len(s.Events)+1),
+		CreatedAt: time.Now(),
+		Update:    update,
+	})
+}
+
 // SaveMessages writes the session (including metadata) to disk.
 // Name kept for backwards compatibility with the agent loop.
 func (s *Session) SaveMessages() {
@@ -147,6 +170,12 @@ func (s *Session) Save() error {
 	}
 	if s.CreatedAt.IsZero() {
 		s.CreatedAt = time.Now()
+	}
+	if s.Messages == nil {
+		s.Messages = []openai.ChatCompletionMessage{}
+	}
+	if s.Events == nil {
+		s.Events = []Event{}
 	}
 	s.UpdatedAt = time.Now()
 	path := sessionPath(s.ID)

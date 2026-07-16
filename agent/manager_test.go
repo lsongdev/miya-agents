@@ -5,7 +5,6 @@ import (
 
 	"github.com/lsongdev/miya-agents/acp"
 	"github.com/lsongdev/miya-agents/config"
-	"github.com/lsongdev/miya-agents/openai"
 	"github.com/lsongdev/miya-agents/session"
 )
 
@@ -64,19 +63,21 @@ func (s *recordingSender) Send(update acp.SessionUpdate) error {
 	return nil
 }
 
-func TestReplaySessionReplaysToolCalls(t *testing.T) {
+func TestReplaySessionReplaysEventLog(t *testing.T) {
 	sess := &session.Session{
-		Messages: []openai.ChatCompletionMessage{
-			openai.UserMessage("read file"),
-			openai.AssistantMessageWithTools("", []openai.ToolCall{{
-				ID:   "call-1",
-				Type: "function",
-				Function: openai.FunctionCall{
-					Name:      "read_file",
-					Arguments: `{"path":"README.md"}`,
-				},
-			}}),
-			openai.ToolResultMessage("call-1", "read_file", "hello"),
+		Events: []session.Event{
+			{ID: "evt_000001", Update: acp.SessionUpdate{
+				SessionUpdate: "user_message_chunk",
+				Content:       acp.ContentBlock{Type: "text", Text: "read file"},
+			}},
+			{ID: "evt_000002", Update: acp.SessionUpdate{
+				SessionUpdate: "tool_call",
+				ToolCall:      acpToolCall(ToolCallEvent{ID: "call-1", Name: "read_file", Arguments: `{"path":"README.md"}`}),
+			}},
+			{ID: "evt_000003", Update: acp.SessionUpdate{
+				SessionUpdate:  "tool_call_update",
+				ToolCallUpdate: acpToolCallUpdate(ToolCallEvent{ID: "call-1", Result: "hello"}, acp.ToolCallCompleted),
+			}},
 		},
 	}
 	sender := &recordingSender{}
@@ -85,19 +86,16 @@ func TestReplaySessionReplaysToolCalls(t *testing.T) {
 		t.Fatalf("replaySession: %v", err)
 	}
 
-	var sawToolCall, sawToolDone bool
-	for _, update := range sender.updates {
-		switch update.SessionUpdate {
-		case "tool_call":
-			sawToolCall = update.ToolCall != nil && update.ToolCall.ToolCallID == "call-1"
-		case "tool_call_update":
-			sawToolDone = update.ToolCallUpdate != nil && update.ToolCallUpdate.ToolCallID == "call-1"
-		}
+	if len(sender.updates) != len(sess.Events) {
+		t.Fatalf("updates = %d, want %d", len(sender.updates), len(sess.Events))
 	}
-	if !sawToolCall {
-		t.Fatal("missing tool_call update")
+	if sender.updates[0].SessionUpdate != "user_message_chunk" {
+		t.Fatalf("first update = %q", sender.updates[0].SessionUpdate)
 	}
-	if !sawToolDone {
-		t.Fatal("missing tool_call_update update")
+	if sender.updates[1].ToolCall == nil || sender.updates[1].ToolCall.ToolCallID != "call-1" {
+		t.Fatal("missing replayed tool_call update")
+	}
+	if sender.updates[2].ToolCallUpdate == nil || sender.updates[2].ToolCallUpdate.ToolCallID != "call-1" {
+		t.Fatal("missing replayed tool_call_update update")
 	}
 }
