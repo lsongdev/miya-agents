@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -111,6 +112,14 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 			}
 			if ok {
 				result = tool.Run(ctx, tc.Function.Arguments)
+				if tc.Function.Name == "attach_file" {
+					attachmentResult, emitted, err := emitAttachedFileResult(sink, result)
+					if err != nil {
+						result = fmt.Sprintf("Error: %v", err)
+					} else if emitted {
+						result = attachmentResult
+					}
+				}
 			} else {
 				result = fmt.Sprintf("Error: unknown tool '%s'", tc.Function.Name)
 			}
@@ -132,6 +141,32 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 		}
 		sess.SaveMessages()
 	}
+}
+
+func emitAttachedFileResult(sink EventSink, result string) (string, bool, error) {
+	var attachment tools.AttachFileResult
+	if err := json.Unmarshal([]byte(result), &attachment); err != nil {
+		return result, false, nil
+	}
+	if attachment.Type != tools.AttachFileEventType {
+		return result, false, nil
+	}
+	if attachment.Data == "" && attachment.URI == "" {
+		return "", false, fmt.Errorf("attachment has neither inline data nor URI")
+	}
+	if err := sink.AssistantFile(FileEvent{
+		Name:     attachment.Name,
+		MimeType: attachment.MimeType,
+		Size:     attachment.Size,
+		Data:     attachment.Data,
+		URI:      attachment.URI,
+	}); err != nil {
+		return "", false, err
+	}
+	if attachment.Data != "" {
+		return fmt.Sprintf("Attached %s (%s, %d bytes) inline.", attachment.Name, attachment.MimeType, attachment.Size), true, nil
+	}
+	return fmt.Sprintf("Attached %s (%s, %d bytes) as %s.", attachment.Name, attachment.MimeType, attachment.Size, attachment.URI), true, nil
 }
 
 func (a *Agent) AddTool(tool openai.Tool) {
@@ -181,6 +216,7 @@ func (a *Agent) BuildTools() {
 		&tools.WriteFileTool{Workspace: workspace},
 		&tools.AppendFileTool{Workspace: workspace},
 		&tools.EditFileTool{Workspace: workspace},
+		&tools.AttachFileTool{Workspace: workspace},
 		&tools.ExecTool{
 			Workspace:           workspace,
 			DefaultTimeout:      tools.ExecDefaultTimeoutSeconds,

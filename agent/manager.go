@@ -89,7 +89,17 @@ type captureWriter struct {
 }
 
 func (w *captureWriter) AssistantDelta(text string) error { w.sb.WriteString(text); return nil }
-func (w *captureWriter) ThoughtDelta(text string) error   { return nil }
+func (w *captureWriter) AssistantFile(event FileEvent) error {
+	if event.URI != "" {
+		w.sb.WriteString(event.URI)
+		return nil
+	}
+	if event.Name != "" {
+		w.sb.WriteString(event.Name)
+	}
+	return nil
+}
+func (w *captureWriter) ThoughtDelta(text string) error { return nil }
 func (w *captureWriter) ToolCallStart(event ToolCallEvent) error {
 	return nil
 }
@@ -235,6 +245,10 @@ func (s *acpSink) AssistantDelta(text string) error {
 		return nil
 	}
 	return s.sender.Send(assistantMessageUpdate(text))
+}
+
+func (s *acpSink) AssistantFile(event FileEvent) error {
+	return s.sender.Send(fileMessageUpdate(event))
 }
 
 func (s *acpSink) ThoughtDelta(text string) error {

@@ -15,10 +15,19 @@ type SessionInfoEvent struct {
 	Title string
 }
 
+type FileEvent struct {
+	Name     string
+	MimeType string
+	Size     int
+	Data     string
+	URI      string
+}
+
 type UsageEvent struct{}
 
 type EventSink interface {
 	AssistantDelta(text string) error
+	AssistantFile(event FileEvent) error
 	ThoughtDelta(text string) error
 	ToolCallStart(event ToolCallEvent) error
 	ToolCallDone(event ToolCallEvent) error

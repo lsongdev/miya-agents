@@ -33,6 +33,12 @@ func (s *recordingSink) AssistantDelta(text string) error {
 	return s.next.AssistantDelta(text)
 }
 
+func (s *recordingSink) AssistantFile(event FileEvent) error {
+	update := fileMessageUpdate(event)
+	s.sess.AppendEvent(update)
+	return s.next.AssistantFile(event)
+}
+
 func (s *recordingSink) ThoughtDelta(text string) error {
 	if text == "" {
 		return nil
@@ -79,6 +85,43 @@ func assistantMessageUpdate(text string) acp.SessionUpdate {
 	return acp.SessionUpdate{
 		SessionUpdate: "agent_message_chunk",
 		Content:       acp.ContentBlock{Type: "text", Text: text},
+	}
+}
+
+func fileMessageUpdate(event FileEvent) acp.SessionUpdate {
+	contentType := "resource"
+	if strings.HasPrefix(event.MimeType, "image/") {
+		contentType = "image"
+	} else if strings.HasPrefix(event.MimeType, "audio/") {
+		contentType = "audio"
+	} else if event.Data == "" && event.URI != "" {
+		contentType = "resource_link"
+	}
+	size := event.Size
+	content := acp.ContentBlock{
+		Type:     contentType,
+		Data:     event.Data,
+		MimeType: event.MimeType,
+		Name:     event.Name,
+		Size:     &size,
+	}
+	if event.URI != "" {
+		content.URI = &event.URI
+	}
+	if contentType == "resource" && event.Data != "" {
+		mimeType := event.MimeType
+		resource, err := json.Marshal(acp.BlobResourceContents{
+			URI:      event.URI,
+			Blob:     event.Data,
+			MimeType: &mimeType,
+		})
+		if err == nil {
+			content.Resource = resource
+		}
+	}
+	return acp.SessionUpdate{
+		SessionUpdate: "agent_message_chunk",
+		Content:       content,
 	}
 }
 

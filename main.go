@@ -230,6 +230,19 @@ func (w *stdoutWriter) AssistantDelta(s string) error {
 	return nil
 }
 
+func (w *stdoutWriter) AssistantFile(event agent.FileEvent) error {
+	w.finishThought()
+	if w.md != nil {
+		w.md.Flush()
+	}
+	if event.URI != "" {
+		fmt.Printf("\n[file] %s (%s, %d bytes): %s\n", event.Name, event.MimeType, event.Size, event.URI)
+		return nil
+	}
+	fmt.Printf("\n[file] %s (%s, %d bytes, inline)\n", event.Name, event.MimeType, event.Size)
+	return nil
+}
+
 func (w *stdoutWriter) ThoughtDelta(s string) error {
 	if s == "" {
 		return nil
