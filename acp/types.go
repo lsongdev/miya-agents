@@ -440,6 +440,66 @@ type SessionUpdate struct {
 	Meta Meta `json:"_meta,omitempty"`
 }
 
+func (u SessionUpdate) MarshalJSON() ([]byte, error) {
+	out := map[string]any{
+		"sessionUpdate": u.SessionUpdate,
+	}
+	if len(u.Meta) > 0 {
+		out["_meta"] = u.Meta
+	}
+
+	switch u.SessionUpdate {
+	case "user_message_chunk", "agent_message_chunk":
+		out["content"] = u.Content
+		if u.MessageID != nil {
+			out["messageId"] = u.MessageID
+		}
+	case "agent_thought_chunk":
+		if u.Thought != "" {
+			out["thought"] = u.Thought
+		}
+		if u.Content.Type != "" {
+			out["content"] = u.Content
+		}
+	case "tool_call":
+		if u.ToolCall != nil {
+			out["toolCall"] = u.ToolCall
+		}
+	case "tool_call_update":
+		if u.ToolCallUpdate != nil {
+			out["toolCallUpdate"] = u.ToolCallUpdate
+		}
+	case "plan":
+		if u.Plan != nil {
+			out["plan"] = u.Plan
+		}
+	case "available_commands_update":
+		if u.AvailableCommands != nil {
+			out["availableCommands"] = u.AvailableCommands
+		}
+	case "current_mode_update":
+		if u.CurrentMode != nil {
+			out["currentMode"] = u.CurrentMode
+		}
+	case "config_option_update":
+		if u.ConfigOption != nil {
+			out["configOption"] = u.ConfigOption
+		}
+	case "session_info_update":
+		if u.SessionInfo != nil {
+			out["sessionInfo"] = u.SessionInfo
+		}
+	case "usage_update":
+		if u.Usage != nil {
+			out["usage"] = u.Usage
+		}
+	default:
+		type alias SessionUpdate
+		return json.Marshal(alias(u))
+	}
+	return json.Marshal(out)
+}
+
 // === JSON-RPC Request/Response Types ===
 
 type InitializeRequest struct {

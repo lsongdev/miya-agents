@@ -217,6 +217,44 @@ func TestClientReceivesNotificationAfterResponse(t *testing.T) {
 	}
 }
 
+func TestSessionUpdateToolCallMarshalShape(t *testing.T) {
+	data, err := json.Marshal(SessionUpdate{
+		SessionUpdate: "tool_call",
+		ToolCall: &ToolCall{
+			ToolCallID: "tc-1",
+			Title:      "Read",
+			Kind:       ToolKindRead,
+			Status:     ToolCallInProgress,
+			Content: []ToolCallContent{{
+				Type:    "content",
+				Content: &ContentBlock{Type: "text", Text: `{"path":"README.md"}`},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+	if _, ok := raw["content"]; ok {
+		t.Fatalf("tool_call must not include top-level content: %s", data)
+	}
+	var nested struct {
+		ToolCall struct {
+			Content []ToolCallContent `json:"content"`
+		} `json:"toolCall"`
+	}
+	if err := json.Unmarshal(data, &nested); err != nil {
+		t.Fatalf("Unmarshal nested tool call: %v", err)
+	}
+	if len(nested.ToolCall.Content) != 1 {
+		t.Fatalf("toolCall.content = %#v", nested.ToolCall.Content)
+	}
+}
+
 func TestCancelNotification(t *testing.T) {
 	client, _, cleanup := setupPipeTest(t)
 	defer cleanup()
