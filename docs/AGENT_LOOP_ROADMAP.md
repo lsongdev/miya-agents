@@ -12,7 +12,7 @@ The current loop is intentionally simple:
 - Session files persist OpenAI chat messages for model context and ACP session events for UI replay.
 - ACP replay sends the persisted event log in order.
 
-This works for basic structured replay. The remaining gaps are richer event types, context compaction, and generated metadata.
+This works for basic structured replay. The remaining gaps are richer event types, automatic compaction thresholds, and better generated metadata quality.
 
 ## Problem Areas
 
@@ -35,11 +35,11 @@ Session files now keep `[]openai.ChatCompletionMessage` and `[]session.Event` se
 
 ### Context Compaction
 
-Long-running sessions need a way to reduce old context while keeping task continuity. Editing the session file is a reasonable implementation detail, but it should be exposed through a clear agent operation rather than ad hoc external mutation.
+Long-running sessions need a way to reduce old context while keeping task continuity. miya-agents exposes this as controlled internal tools, so the model can decide when session maintenance is useful while the runtime still owns the actual mutation boundaries.
 
 ### Session Titles
 
-Using the session ID as the visible title is poor UX. The short-term fallback should be the first user message. The long-term solution should be generated session summaries/title metadata.
+Using the session ID as the visible title is poor UX. The current fallback is the first user message, and `rename_session` lets the model update the title once the goal is clear.
 
 ## Target Architecture
 
@@ -98,7 +98,7 @@ Guidelines:
 
 ## Context Compaction
 
-Add compaction as an explicit session operation.
+Add compaction as an explicit internal session operation.
 
 Initial implementation:
 
@@ -108,11 +108,13 @@ Initial implementation:
 4. Store the summary in `session.summary`.
 5. Append a compaction record for auditability.
 
-Potential entry points:
+Current and potential entry points:
 
-- CLI command: `miya sessions compact <id>`
-- ACP method or command if the protocol surface supports it later
 - Internal tool: `compact_context`
+- Internal tool: `summarize_session`
+- Internal tool: `rename_session`
+- Future CLI command: `miya sessions compact <id>`
+- ACP method or command if the protocol surface supports it later
 - Automatic threshold: compact when estimated token usage exceeds a configured limit
 
 Avoid silently rewriting active sessions without recording the compaction.
@@ -130,19 +132,20 @@ Medium term:
 - Emit `session_info_update` so clients update the row immediately.
 - Save the generated title to the session file.
 
-Long term:
+Current internal tools:
 
-- Add a `summarize_session` operation that updates both `title` and `summary`.
-- Use this same operation for compaction and session list metadata.
+- `rename_session` updates `session.title`; the agent loop emits and records a replayable `session_info_update` when it observes the title change.
+- `summarize_session` calls a summarizer profile when configured, falling back to the current profile, then updates `session.summary`.
+- `compact_context` summarizes older messages, replaces them with a synthetic system summary, updates `session.summary`, and appends a compaction audit record.
 
-This should be an agent operation, not a normal user-visible tool by default. Exposing it as a tool risks the model changing metadata unpredictably during ordinary tasks. A controlled internal operation can still use the same provider/client infrastructure.
+These are model-callable tools, but they are intentionally narrow. The model provides intent and summary content through a summarizer agent; the runtime decides the exact message range, preserves recent active tool calls, and never mutates `events`.
 
 ## Suggested Order
 
-1. Add session metadata fields: `title`, `updated_at`, `summary`.
-2. Return title/updatedAt from `session/list`.
-3. Persist replayable session events.
-4. Add title generation after first turn.
+1. Add session metadata fields: `title`, `updated_at`, `summary`. Done.
+2. Return title/updatedAt from `session/list`. Done.
+3. Persist replayable session events. Done.
+4. Add controlled internal tools for title, summary, and compaction. Done.
 5. Add manual compaction command.
 6. Add automatic compaction threshold.
 

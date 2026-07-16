@@ -162,6 +162,7 @@ func runCommand(args []string) {
 	if sess == nil {
 		sess = ag.NewSession()
 	}
+	ag.AddSessionTools(sess, agentManager)
 
 	output := &stdoutWriter{}
 	sink := agent.NewRecordingSink(sess, output)

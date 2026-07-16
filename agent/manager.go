@@ -208,6 +208,7 @@ func (m *Manager) Prompt(ctx context.Context, req *acp.PromptRequest, sender acp
 	if err != nil {
 		return nil, fmt.Errorf("use agent: %w", err)
 	}
+	ag.AddSessionTools(sess, m)
 
 	sink := NewRecordingSink(sess, &acpSink{sessionID: req.SessionID, sender: sender})
 	if titleChanged {

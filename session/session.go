@@ -21,14 +21,25 @@ type Event struct {
 	Update    acp.SessionUpdate `json:"update"`
 }
 
+type Compaction struct {
+	ID           string    `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	MessageStart int       `json:"message_start"`
+	MessageEnd   int       `json:"message_end"`
+	KeepRecent   int       `json:"keep_recent"`
+	Summary      string    `json:"summary"`
+}
+
 type Session struct {
-	ID        string                         `json:"id"`
-	AgentName string                         `json:"agent_name"`
-	Title     string                         `json:"title,omitempty"`
-	CreatedAt time.Time                      `json:"created_at"`
-	UpdatedAt time.Time                      `json:"updated_at,omitempty"`
-	Messages  []openai.ChatCompletionMessage `json:"messages"`
-	Events    []Event                        `json:"events"`
+	ID          string                         `json:"id"`
+	AgentName   string                         `json:"agent_name"`
+	Title       string                         `json:"title,omitempty"`
+	Summary     string                         `json:"summary,omitempty"`
+	CreatedAt   time.Time                      `json:"created_at"`
+	UpdatedAt   time.Time                      `json:"updated_at,omitempty"`
+	Messages    []openai.ChatCompletionMessage `json:"messages"`
+	Events      []Event                        `json:"events"`
+	Compactions []Compaction                   `json:"compactions"`
 }
 
 func sessionsDir() string {
@@ -80,6 +91,9 @@ func Load(id string) (*Session, error) {
 	}
 	if s.Events == nil {
 		s.Events = []Event{}
+	}
+	if s.Compactions == nil {
+		s.Compactions = []Compaction{}
 	}
 	return &s, nil
 }
@@ -155,6 +169,17 @@ func (s *Session) AppendEvent(update acp.SessionUpdate) {
 	})
 }
 
+func (s *Session) AppendCompaction(messageStart, messageEnd, keepRecent int, summary string) {
+	s.Compactions = append(s.Compactions, Compaction{
+		ID:           fmt.Sprintf("cmp_%06d", len(s.Compactions)+1),
+		CreatedAt:    time.Now(),
+		MessageStart: messageStart,
+		MessageEnd:   messageEnd,
+		KeepRecent:   keepRecent,
+		Summary:      summary,
+	})
+}
+
 // SaveMessages writes the session (including metadata) to disk.
 // Name kept for backwards compatibility with the agent loop.
 func (s *Session) SaveMessages() {
@@ -176,6 +201,9 @@ func (s *Session) Save() error {
 	}
 	if s.Events == nil {
 		s.Events = []Event{}
+	}
+	if s.Compactions == nil {
+		s.Compactions = []Compaction{}
 	}
 	s.UpdatedAt = time.Now()
 	path := sessionPath(s.ID)
