@@ -138,6 +138,7 @@ type McpServerConfig struct {
 // For example: NewStdioClient("npx", "-y", "12306-mcp")
 func NewStdioClient(server *McpServerConfig) (*Client, error) {
 	cmd := exec.Command(server.Command, server.Args...)
+	configureCommand(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stdin pipe: %w", err)

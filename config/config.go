@@ -101,8 +101,22 @@ type LoggingConfig struct {
 	File    string `json:"file,omitempty" yaml:"file,omitempty"`     // log file path
 }
 
-var ConfigPath = filepath.Join(os.Getenv("HOME"), ".miya")
+var ConfigPath = defaultConfigPath()
 var ConfigFile = filepath.Join(ConfigPath, "config.json")
+
+func defaultConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		return filepath.Join(home, ".miya")
+	}
+	if home = os.Getenv("HOME"); home != "" {
+		return filepath.Join(home, ".miya")
+	}
+	if home = os.Getenv("USERPROFILE"); home != "" {
+		return filepath.Join(home, ".miya")
+	}
+	return filepath.Join(".miya")
+}
 
 func LoadConfig() (cfg *Config, err error) {
 	if _, err := os.Stat(ConfigFile); os.IsNotExist(err) {

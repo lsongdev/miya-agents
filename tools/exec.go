@@ -115,14 +115,18 @@ func (t *ExecTool) Run(ctx context.Context, args string) string {
 }
 
 func shellCommand(ctx context.Context, command string) *exec.Cmd {
+	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		shell := os.Getenv("ComSpec")
 		if shell == "" {
 			shell = "cmd.exe"
 		}
-		return exec.CommandContext(ctx, shell, "/C", command)
+		cmd = exec.CommandContext(ctx, shell, "/C", command)
+	} else {
+		cmd = exec.CommandContext(ctx, "sh", "-c", command)
 	}
-	return exec.CommandContext(ctx, "sh", "-c", command)
+	configureShellCommand(cmd)
+	return cmd
 }
 
 // expandPath expands a path that may start with ~ to the user's home directory.

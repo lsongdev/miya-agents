@@ -41,6 +41,7 @@ func (c *Client) OnNotification(handler NotificationHandler) {
 // Agent stderr is forwarded to the parent process's stderr for visibility.
 func DialStdio(command string, args ...string) (*Client, error) {
 	cmd := exec.Command(command, args...)
+	configureCommand(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("acp: stdin pipe: %w", err)
