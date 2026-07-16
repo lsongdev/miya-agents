@@ -18,6 +18,7 @@ type NotificationHandler func(method string, params json.RawMessage)
 type Client struct {
 	stdin          io.WriteCloser
 	stdout         *bufio.Reader
+	stdoutCloser   io.Closer
 	callMu         sync.Mutex
 	writeMu        sync.Mutex
 	id             atomic.Int64
@@ -52,13 +53,17 @@ func DialStdio(command string, args ...string) (*Client, error) {
 
 // NewClient creates an ACP client from the given read/writer.
 func NewClient(stdin io.WriteCloser, stdout io.Reader) *Client {
-	return &Client{
+	client := &Client{
 		stdin: stdin,
 		// bufio.Reader.ReadBytes('\n') has no line-size limit, so replayed
 		// session/update notifications with large tool outputs won't close
 		// the connection the way bufio.Scanner's default 64KB cap did.
 		stdout: bufio.NewReaderSize(stdout, 64*1024),
 	}
+	if closer, ok := stdout.(io.Closer); ok {
+		client.stdoutCloser = closer
+	}
+	return client
 }
 
 func (c *Client) sendRecv(method string, params, result any) error {
@@ -361,8 +366,14 @@ type jsonrpcRequest struct {
 
 // Close closes the client's stdin, signaling EOF to the agent.
 func (c *Client) Close() error {
+	var err error
 	if c.stdin != nil {
-		return c.stdin.Close()
+		err = c.stdin.Close()
 	}
-	return nil
+	if c.stdoutCloser != nil {
+		if closeErr := c.stdoutCloser.Close(); err == nil {
+			err = closeErr
+		}
+	}
+	return err
 }
