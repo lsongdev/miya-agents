@@ -14,6 +14,7 @@ import (
 	"github.com/lsongdev/miya-agents/acp"
 	"github.com/lsongdev/miya-agents/agent"
 	"github.com/lsongdev/miya-agents/config"
+	"github.com/lsongdev/miya-agents/logging"
 	"github.com/lsongdev/miya-agents/mcp"
 	"github.com/lsongdev/miya-agents/openai"
 	"github.com/lsongdev/miya-agents/router"
@@ -34,6 +35,10 @@ func (e *envVars) Set(value string) error {
 }
 
 func main() {
+	if err := logging.SetupFromDefaultConfig("miya-agents"); err != nil {
+		log.Printf("[WARN] logging setup failed: %v", err)
+	}
+
 	if len(os.Args) < 2 {
 		runCommand(nil)
 		return
