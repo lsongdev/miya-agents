@@ -207,30 +207,46 @@ func runCommand(args []string) {
 	}
 }
 
+type stdoutMode string
+
+const (
+	stdoutModeIdle      stdoutMode = ""
+	stdoutModeAssistant stdoutMode = "assistant"
+	stdoutModeThought   stdoutMode = "thought"
+)
+
 type stdoutWriter struct {
-	md *MarkdownRenderer
+	md   *MarkdownRenderer
+	mode stdoutMode
 }
 
 func (w *stdoutWriter) AssistantDelta(s string) error {
+	w.finishThought()
 	if w.md == nil {
 		w.md = NewMarkdownRenderer(os.Stdout)
 	}
+	w.mode = stdoutModeAssistant
 	w.md.Write(s)
 	return nil
 }
 
 func (w *stdoutWriter) ThoughtDelta(s string) error {
-	if strings.TrimSpace(s) == "" {
+	if s == "" {
 		return nil
 	}
 	if w.md != nil {
 		w.md.Flush()
 	}
-	fmt.Printf("\n[thought] %s\n", s)
+	if w.mode != stdoutModeThought {
+		fmt.Printf("\n%s[thought]%s %s", dim, reset, dim)
+		w.mode = stdoutModeThought
+	}
+	fmt.Print(s)
 	return nil
 }
 
 func (w *stdoutWriter) ToolCallStart(event agent.ToolCallEvent) error {
+	w.finishThought()
 	if w.md != nil {
 		w.md.Flush()
 	}
@@ -239,6 +255,7 @@ func (w *stdoutWriter) ToolCallStart(event agent.ToolCallEvent) error {
 }
 
 func (w *stdoutWriter) ToolCallDone(event agent.ToolCallEvent) error {
+	w.finishThought()
 	fmt.Printf("[tool:%s] %s\n", event.Status, event.Result)
 	return nil
 }
@@ -252,11 +269,21 @@ func (w *stdoutWriter) Usage(event agent.UsageEvent) error {
 }
 
 func (w *stdoutWriter) Done() error {
+	w.finishThought()
 	if w.md != nil {
 		w.md.Flush()
 	}
 	fmt.Println()
+	w.mode = stdoutModeIdle
 	return nil
+}
+
+func (w *stdoutWriter) finishThought() {
+	if w.mode != stdoutModeThought {
+		return
+	}
+	fmt.Printf("%s\n", reset)
+	w.mode = stdoutModeIdle
 }
 
 func sessionsCommand() {
