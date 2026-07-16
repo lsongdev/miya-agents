@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -80,7 +81,7 @@ func (t *ExecTool) Run(ctx context.Context, args string) string {
 	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(execCtx, "sh", "-c", a.Command)
+	cmd := shellCommand(execCtx, a.Command)
 	if a.Workdir != "" {
 		cmd.Dir = expandPath(a.Workdir)
 	} else if t.Workspace != "" {
@@ -111,6 +112,17 @@ func (t *ExecTool) Run(ctx context.Context, args string) string {
 	}
 
 	return result
+}
+
+func shellCommand(ctx context.Context, command string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		shell := os.Getenv("ComSpec")
+		if shell == "" {
+			shell = "cmd.exe"
+		}
+		return exec.CommandContext(ctx, shell, "/C", command)
+	}
+	return exec.CommandContext(ctx, "sh", "-c", command)
 }
 
 // expandPath expands a path that may start with ~ to the user's home directory.
