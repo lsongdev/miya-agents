@@ -2,6 +2,7 @@ package acp
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,9 +12,6 @@ import (
 	"sync/atomic"
 )
 
-// NotificationHandler is called for each JSON-RPC notification received.
-type NotificationHandler func(method string, params json.RawMessage)
-
 // Client is an ACP client that communicates with an ACP agent over stdio.
 type Client struct {
 	stdin          io.WriteCloser
@@ -21,6 +19,7 @@ type Client struct {
 	writeMu        sync.Mutex
 	id             atomic.Int64
 	onNotification NotificationHandler
+	onRequest      ClientHandler
 	pendingMu      sync.Mutex
 	pending        map[int64]chan clientResponse
 	closed         chan struct{}
@@ -32,9 +31,14 @@ type clientResponse struct {
 	err    error
 }
 
-// OnNotification registers a handler for incoming notifications.
+// OnNotification registers a handler for incoming raw JSON-RPC notifications.
 func (c *Client) OnNotification(handler NotificationHandler) {
 	c.onNotification = handler
+}
+
+// OnRequest registers a handler for ACP requests sent by the agent to the client.
+func (c *Client) OnRequest(handler ClientHandler) {
+	c.onRequest = handler
 }
 
 // DialStdio launches an ACP agent subprocess and returns a Client connected to it.
@@ -161,6 +165,10 @@ func (c *Client) handleFrame(line []byte) {
 		}
 		return
 	}
+	if raw.Method != "" {
+		go c.handleRequest(raw.ID, raw.Method, raw.Params)
+		return
+	}
 	respID, ok := responseID(raw.ID)
 	if !ok {
 		return
@@ -175,6 +183,128 @@ func (c *Client) handleFrame(line []byte) {
 	if ch != nil {
 		ch <- resp
 	}
+}
+
+func (c *Client) handleRequest(id any, method string, params json.RawMessage) {
+	handler := c.onRequest
+	if handler == nil {
+		c.writeError(id, ErrMethodNotFound, fmt.Sprintf("Method not found: %s", method))
+		return
+	}
+
+	ctx := context.Background()
+	switch method {
+	case "session/request_permission":
+		var req RequestPermissionRequest
+		if err := json.Unmarshal(params, &req); err != nil {
+			c.writeError(id, ErrInvalidParams, "Invalid session/request_permission params")
+			return
+		}
+		resp, err := handler.RequestPermission(ctx, &req)
+		c.writeResponse(id, resp, err)
+
+	case "fs/read_text_file":
+		var req ReadTextFileRequest
+		if err := json.Unmarshal(params, &req); err != nil {
+			c.writeError(id, ErrInvalidParams, "Invalid fs/read_text_file params")
+			return
+		}
+		resp, err := handler.ReadTextFile(ctx, &req)
+		c.writeResponse(id, resp, err)
+
+	case "fs/write_text_file":
+		var req WriteTextFileRequest
+		if err := json.Unmarshal(params, &req); err != nil {
+			c.writeError(id, ErrInvalidParams, "Invalid fs/write_text_file params")
+			return
+		}
+		resp, err := handler.WriteTextFile(ctx, &req)
+		c.writeResponse(id, resp, err)
+
+	case "terminal/create":
+		var req CreateTerminalRequest
+		if err := json.Unmarshal(params, &req); err != nil {
+			c.writeError(id, ErrInvalidParams, "Invalid terminal/create params")
+			return
+		}
+		resp, err := handler.CreateTerminal(ctx, &req)
+		c.writeResponse(id, resp, err)
+
+	case "terminal/output":
+		var req TerminalOutputRequest
+		if err := json.Unmarshal(params, &req); err != nil {
+			c.writeError(id, ErrInvalidParams, "Invalid terminal/output params")
+			return
+		}
+		resp, err := handler.TerminalOutput(ctx, &req)
+		c.writeResponse(id, resp, err)
+
+	case "terminal/release":
+		var req ReleaseTerminalRequest
+		if err := json.Unmarshal(params, &req); err != nil {
+			c.writeError(id, ErrInvalidParams, "Invalid terminal/release params")
+			return
+		}
+		resp, err := handler.ReleaseTerminal(ctx, &req)
+		c.writeResponse(id, resp, err)
+
+	case "terminal/wait_for_exit":
+		var req WaitForTerminalExitRequest
+		if err := json.Unmarshal(params, &req); err != nil {
+			c.writeError(id, ErrInvalidParams, "Invalid terminal/wait_for_exit params")
+			return
+		}
+		resp, err := handler.WaitForTerminalExit(ctx, &req)
+		c.writeResponse(id, resp, err)
+
+	case "terminal/kill":
+		var req KillTerminalRequest
+		if err := json.Unmarshal(params, &req); err != nil {
+			c.writeError(id, ErrInvalidParams, "Invalid terminal/kill params")
+			return
+		}
+		resp, err := handler.KillTerminal(ctx, &req)
+		c.writeResponse(id, resp, err)
+
+	default:
+		c.writeError(id, ErrMethodNotFound, fmt.Sprintf("Method not found: %s", method))
+	}
+}
+
+func (c *Client) writeResponse(id any, result any, err error) {
+	if err != nil {
+		c.writeError(id, ErrInternal, err.Error())
+		return
+	}
+	resp := jsonrpcResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result:  result,
+	}
+	c.writeJSON(resp)
+}
+
+func (c *Client) writeError(id any, code int, message string) {
+	resp := jsonrpcResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Error: &jsonrpcError{
+			Code:    code,
+			Message: message,
+		},
+	}
+	c.writeJSON(resp)
+}
+
+func (c *Client) writeJSON(v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	data = append(data, '\n')
+	c.writeMu.Lock()
+	_, _ = c.stdin.Write(data)
+	c.writeMu.Unlock()
 }
 
 func responseID(id any) (int64, bool) {
@@ -357,23 +487,24 @@ func (c *Client) CancelSession(sessionID SessionID) error {
 // The channel is closed when the reader encounters an error or EOF.
 func (c *Client) ReceiveSessionUpdates(ctx any) <-chan SessionUpdate {
 	ch := make(chan SessionUpdate, 64)
-	c.OnNotification(func(method string, params json.RawMessage) {
-		if method != "session/update" {
-			return
-		}
-		var n SessionNotification
-		if json.Unmarshal(params, &n) == nil {
-			select {
-			case ch <- n.Update:
-			default:
-			}
-		}
-	})
+	c.OnNotification(NewNotificationHandler(sessionUpdateReceiver{ch: ch}))
 	go func() {
 		<-c.closed
 		close(ch)
 	}()
 	return ch
+}
+
+type sessionUpdateReceiver struct {
+	DefaultNotificationReceiver
+	ch chan SessionUpdate
+}
+
+func (r sessionUpdateReceiver) SessionUpdate(notification *SessionNotification) {
+	select {
+	case r.ch <- notification.Update:
+	default:
+	}
 }
 
 // jsonrpcRequest is a JSON-RPC 2.0 request.

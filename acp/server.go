@@ -8,29 +8,34 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 )
 
 // Server is a JSON-RPC stdio server for the ACP protocol.
 type Server struct {
-	handler Handler
-	scanner *bufio.Scanner
-	encoder *json.Encoder
-	mu      sync.Mutex
+	handler   ServerHandler
+	scanner   *bufio.Scanner
+	encoder   *json.Encoder
+	mu        sync.Mutex
+	id        atomic.Int64
+	pendingMu sync.Mutex
+	pending   map[int64]chan clientResponse
 
 	cancelFuncs map[SessionID]context.CancelFunc
 	cancelMu    sync.Mutex
 }
 
 // NewServer creates a new ACP stdio server writing to os.Stdout.
-func NewServer(handler Handler) *Server {
+func NewServer(handler ServerHandler) *Server {
 	return NewServerWithWriter(handler, os.Stdout)
 }
 
 // NewServerWithWriter creates a new ACP stdio server writing to the given writer.
-func NewServerWithWriter(handler Handler, w io.Writer) *Server {
+func NewServerWithWriter(handler ServerHandler, w io.Writer) *Server {
 	return &Server{
 		handler:     handler,
 		encoder:     json.NewEncoder(w),
+		pending:     make(map[int64]chan clientResponse),
 		cancelFuncs: make(map[SessionID]context.CancelFunc),
 	}
 }
@@ -62,9 +67,11 @@ func (s *Server) ServeFromReader(reader io.Reader) error {
 
 func (s *Server) dispatch(data []byte) {
 	var raw struct {
-		ID     any          `json:"id"`
-		Method string       `json:"method"`
+		ID     any             `json:"id"`
+		Method string          `json:"method"`
 		Params json.RawMessage `json:"params,omitempty"`
+		Result json.RawMessage `json:"result,omitempty"`
+		Error  *jsonrpcError   `json:"error,omitempty"`
 	}
 
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -72,8 +79,8 @@ func (s *Server) dispatch(data []byte) {
 		return
 	}
 
-	if raw.Method == "" {
-		s.writeError(nil, ErrInvalidRequest, "Method is required")
+	if raw.ID != nil && raw.Method == "" {
+		s.handleResponse(raw.ID, raw.Result, raw.Error)
 		return
 	}
 
@@ -81,9 +88,29 @@ func (s *Server) dispatch(data []byte) {
 	rawID := raw.ID
 
 	if isNotification {
+		if raw.Method == "" {
+			return
+		}
 		s.handleNotification(raw.Method, raw.Params)
 	} else {
 		go s.handleRequest(rawID, raw.Method, raw.Params)
+	}
+}
+
+func (s *Server) handleResponse(id any, result json.RawMessage, rpcErr *jsonrpcError) {
+	respID, ok := responseID(id)
+	if !ok {
+		return
+	}
+	resp := clientResponse{result: result}
+	if rpcErr != nil {
+		resp.err = fmt.Errorf("acp: %s", rpcErr.Message)
+	}
+	s.pendingMu.Lock()
+	ch := s.pending[respID]
+	s.pendingMu.Unlock()
+	if ch != nil {
+		ch <- resp
 	}
 }
 
@@ -288,8 +315,7 @@ func (s *Server) handleNotification(method string, params json.RawMessage) {
 func (s *Server) newSender(sessionID SessionID) SessionUpdateSender {
 	return &notificationSender{
 		sessionID: sessionID,
-		encoder:   s.encoder,
-		mu:        &s.mu,
+		server:    s,
 	}
 }
 
@@ -332,17 +358,119 @@ func (s *Server) writeError(id any, code int, message string) {
 	s.encoder.Encode(resp)
 }
 
+func (s *Server) callClient(ctx context.Context, method string, params, result any) error {
+	id := s.id.Add(1)
+	req := jsonrpcRequest{
+		JSONRPC: "2.0",
+		ID:      id,
+		Method:  method,
+		Params:  params,
+	}
+
+	respCh := make(chan clientResponse, 1)
+	s.pendingMu.Lock()
+	s.pending[id] = respCh
+	s.pendingMu.Unlock()
+	defer func() {
+		s.pendingMu.Lock()
+		delete(s.pending, id)
+		s.pendingMu.Unlock()
+	}()
+
+	s.mu.Lock()
+	err := s.encoder.Encode(req)
+	s.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("acp: write client request: %w", err)
+	}
+
+	select {
+	case resp := <-respCh:
+		if resp.err != nil {
+			return resp.err
+		}
+		if result != nil && resp.result != nil {
+			if err := json.Unmarshal(resp.result, result); err != nil {
+				return fmt.Errorf("acp: unmarshal client response: %w", err)
+			}
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Server) RequestPermission(ctx context.Context, req *RequestPermissionRequest) (*RequestPermissionResponse, error) {
+	var resp RequestPermissionResponse
+	if err := s.callClient(ctx, "session/request_permission", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (s *Server) ReadTextFile(ctx context.Context, req *ReadTextFileRequest) (*ReadTextFileResponse, error) {
+	var resp ReadTextFileResponse
+	if err := s.callClient(ctx, "fs/read_text_file", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (s *Server) WriteTextFile(ctx context.Context, req *WriteTextFileRequest) (*WriteTextFileResponse, error) {
+	var resp WriteTextFileResponse
+	if err := s.callClient(ctx, "fs/write_text_file", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (s *Server) CreateTerminal(ctx context.Context, req *CreateTerminalRequest) (*CreateTerminalResponse, error) {
+	var resp CreateTerminalResponse
+	if err := s.callClient(ctx, "terminal/create", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (s *Server) TerminalOutput(ctx context.Context, req *TerminalOutputRequest) (*TerminalOutputResponse, error) {
+	var resp TerminalOutputResponse
+	if err := s.callClient(ctx, "terminal/output", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (s *Server) ReleaseTerminal(ctx context.Context, req *ReleaseTerminalRequest) (*ReleaseTerminalResponse, error) {
+	var resp ReleaseTerminalResponse
+	if err := s.callClient(ctx, "terminal/release", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (s *Server) WaitForTerminalExit(ctx context.Context, req *WaitForTerminalExitRequest) (*WaitForTerminalExitResponse, error) {
+	var resp WaitForTerminalExitResponse
+	if err := s.callClient(ctx, "terminal/wait_for_exit", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (s *Server) KillTerminal(ctx context.Context, req *KillTerminalRequest) (*KillTerminalResponse, error) {
+	var resp KillTerminalResponse
+	if err := s.callClient(ctx, "terminal/kill", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // notificationSender implements SessionUpdateSender.
 type notificationSender struct {
 	sessionID SessionID
-	encoder   *json.Encoder
-	mu        *sync.Mutex
+	server    *Server
 }
 
 func (n *notificationSender) Send(update SessionUpdate) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
 	notif := jsonrpcNotification{
 		JSONRPC: "2.0",
 		Method:  "session/update",
@@ -351,14 +479,20 @@ func (n *notificationSender) Send(update SessionUpdate) error {
 			Update:    update,
 		},
 	}
-	return n.encoder.Encode(notif)
+	n.server.mu.Lock()
+	defer n.server.mu.Unlock()
+	return n.server.encoder.Encode(notif)
+}
+
+func (n *notificationSender) Client() ClientCaller {
+	return n.server
 }
 
 // jsonrpcResponse is a JSON-RPC 2.0 response.
 type jsonrpcResponse struct {
-	JSONRPC string       `json:"jsonrpc"`
-	ID      any          `json:"id"`
-	Result  any          `json:"result,omitempty"`
+	JSONRPC string        `json:"jsonrpc"`
+	ID      any           `json:"id"`
+	Result  any           `json:"result,omitempty"`
 	Error   *jsonrpcError `json:"error,omitempty"`
 }
 

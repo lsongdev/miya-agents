@@ -6,7 +6,7 @@ import "io"
 //
 // It preserves the JSON-RPC ACP boundary while avoiding a subprocess and stdio.
 // This is useful for embedding an agent runtime in a GUI or service process.
-func DialInProcess(handler Handler) *Client {
+func DialInProcess(handler ServerHandler) *Client {
 	clientReader, serverWriter := io.Pipe()
 	serverReader, clientWriter := io.Pipe()
 

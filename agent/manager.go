@@ -144,7 +144,7 @@ func (m *Manager) RunAgent(ctx context.Context, name, prompt string) (string, er
 	return writer.sb.String(), nil
 }
 
-// acp.Handler implementation
+// acp.ServerHandler implementation
 
 func (m *Manager) Initialize(ctx context.Context, req *acp.InitializeRequest) (*acp.InitializeResponse, error) {
 	caps := acp.DefaultAgentCapabilities()
