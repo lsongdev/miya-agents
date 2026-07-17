@@ -30,8 +30,8 @@ func TestAppendContextMaintenanceNotice(t *testing.T) {
 			if !strings.Contains(msg.Content, "session-1") {
 				t.Fatalf("notice missing session id: %q", msg.Content)
 			}
-			if !strings.Contains(msg.Content, "~/.miya/sessions/session-1.json") {
-				t.Fatalf("notice missing session path: %q", msg.Content)
+			if strings.Contains(msg.Content, "/") || strings.Contains(msg.Content, ".json") {
+				t.Fatalf("notice should not include filesystem paths: %q", msg.Content)
 			}
 			if strings.Contains(msg.Content, "session"+"-"+"maintenance") {
 				t.Fatalf("notice should not mention named maintenance skills: %q", msg.Content)

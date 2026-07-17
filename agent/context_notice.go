@@ -33,7 +33,7 @@ func (a *Agent) AppendContextMaintenanceNotice(sess *session.Session) {
 	if remainingPercent < 0 {
 		remainingPercent = 0
 	}
-	notice := fmt.Sprintf("%s ~%d%% context remaining for session %s at ~/.miya/sessions/%s.json", maintenanceNoticePrefix, remainingPercent, sess.ID, sess.ID)
+	notice := fmt.Sprintf("%s ~%d%% context remaining for session %s", maintenanceNoticePrefix, remainingPercent, sess.ID)
 	sess.Messages = append(sess.Messages, openai.SystemMessage(notice))
 }
 
