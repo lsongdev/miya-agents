@@ -13,7 +13,10 @@ func TestAgentEndpointsDerivesProfilesBeforeExternalAgents(t *testing.T) {
 			"coding":  {},
 			"default": {},
 		},
-		Agents: []ACPAgentConfig{{ID: "opencode", Type: "stdio", Command: "opencode"}},
+		Agents: []ACPAgentConfig{
+			{ID: "opencode", Type: "stdio", Command: "opencode"},
+			{ID: "old-builtin", Type: "builtin", Profile: "default"},
+		},
 	}
 	endpoints, err := AgentEndpoints(cfg)
 	if err != nil {

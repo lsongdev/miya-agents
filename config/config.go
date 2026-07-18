@@ -82,6 +82,9 @@ func AgentEndpoints(cfg *Config) ([]ACPAgentConfig, error) {
 		used[id] = struct{}{}
 	}
 	for _, endpoint := range cfg.Agents {
+		if endpoint.Type == "builtin" {
+			continue
+		}
 		if _, exists := used[endpoint.ID]; exists {
 			return nil, fmt.Errorf("agent id %q conflicts with a profile", endpoint.ID)
 		}
