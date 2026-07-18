@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/lsongdev/miya-agents/mcp"
@@ -31,7 +32,7 @@ type ACPAgentConfig struct {
 	Name    string            `json:"name,omitempty" yaml:"name,omitempty"`
 	Enabled *bool             `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	Type    string            `json:"type,omitempty" yaml:"type,omitempty"` // builtin, stdio (default), http, or sse
-	Profile string            `json:"profile,omitempty" yaml:"profile,omitempty"`
+	Profile string            `json:"-" yaml:"-"`
 	Command string            `json:"command,omitempty" yaml:"command,omitempty"`
 	Args    []string          `json:"args,omitempty" yaml:"args,omitempty"`
 	URL     string            `json:"url,omitempty" yaml:"url,omitempty"`
@@ -40,6 +41,54 @@ type ACPAgentConfig struct {
 
 func (a ACPAgentConfig) IsEnabled() bool {
 	return a.Enabled == nil || *a.Enabled
+}
+
+// AgentEndpoints returns one built-in agent for every profile followed by the
+// explicitly configured external ACP agents.
+func AgentEndpoints(cfg *Config) ([]ACPAgentConfig, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	profileIDs := make([]string, 0, len(cfg.Profiles))
+	for id := range cfg.Profiles {
+		profileIDs = append(profileIDs, id)
+	}
+	sort.Slice(profileIDs, func(i, j int) bool {
+		if profileIDs[i] == "default" {
+			return true
+		}
+		if profileIDs[j] == "default" {
+			return false
+		}
+		return profileIDs[i] < profileIDs[j]
+	})
+
+	endpoints := make([]ACPAgentConfig, 0, len(profileIDs)+len(cfg.Agents))
+	used := make(map[string]struct{}, cap(endpoints))
+	for _, id := range profileIDs {
+		if strings.TrimSpace(id) == "" || strings.Contains(id, ":") {
+			return nil, fmt.Errorf("invalid profile id %q", id)
+		}
+		enabled := true
+		endpoints = append(endpoints, ACPAgentConfig{
+			ID:      id,
+			Name:    id,
+			Enabled: &enabled,
+			Type:    "builtin",
+			Profile: id,
+			Command: "miya-agent",
+			Args:    []string{"acp"},
+		})
+		used[id] = struct{}{}
+	}
+	for _, endpoint := range cfg.Agents {
+		if _, exists := used[endpoint.ID]; exists {
+			return nil, fmt.Errorf("agent id %q conflicts with a profile", endpoint.ID)
+		}
+		used[endpoint.ID] = struct{}{}
+		endpoints = append(endpoints, endpoint)
+	}
+	return endpoints, nil
 }
 
 func (c *Config) UnmarshalJSON(data []byte) error {

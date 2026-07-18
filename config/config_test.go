@@ -1,10 +1,54 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestAgentEndpointsDerivesProfilesBeforeExternalAgents(t *testing.T) {
+	cfg := &Config{
+		Profiles: map[string]*ProfileConfig{
+			"coding":  {},
+			"default": {},
+		},
+		Agents: []ACPAgentConfig{{ID: "opencode", Type: "stdio", Command: "opencode"}},
+	}
+	endpoints, err := AgentEndpoints(cfg)
+	if err != nil {
+		t.Fatalf("AgentEndpoints: %v", err)
+	}
+	if len(endpoints) != 3 {
+		t.Fatalf("endpoints = %d, want 3", len(endpoints))
+	}
+	if endpoints[0].ID != "default" || endpoints[0].Profile != "default" || endpoints[0].Type != "builtin" {
+		t.Fatalf("default endpoint = %#v", endpoints[0])
+	}
+	if endpoints[1].ID != "coding" || endpoints[2].ID != "opencode" {
+		t.Fatalf("endpoint order = %#v", endpoints)
+	}
+}
+
+func TestAgentEndpointsRejectsExternalProfileIDConflict(t *testing.T) {
+	_, err := AgentEndpoints(&Config{
+		Profiles: map[string]*ProfileConfig{"default": {}},
+		Agents:   []ACPAgentConfig{{ID: "default", Type: "stdio", Command: "other"}},
+	})
+	if err == nil {
+		t.Fatal("AgentEndpoints succeeded with conflicting ids")
+	}
+}
+
+func TestAgentProfileBindingIsRuntimeOnly(t *testing.T) {
+	data, err := json.Marshal(ACPAgentConfig{ID: "default", Type: "builtin", Profile: "default"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if string(data) != `{"id":"default","type":"builtin"}` {
+		t.Fatalf("json = %s", data)
+	}
+}
 
 func TestProfileGetWorkspaceDefaultsToMiyaWorkspace(t *testing.T) {
 	old := ConfigPath
