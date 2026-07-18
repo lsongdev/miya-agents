@@ -54,3 +54,13 @@ func TestSaveConfigToFileNormalizesConfig(t *testing.T) {
 		t.Fatalf("mcp server type = %q, want sse", loaded.McpServers["remote"].Type)
 	}
 }
+
+func TestConfigRejectsChannelsObject(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"channels":{"telegram":{"token":"old"}}}`), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := LoadConfigFromFile(path); err == nil {
+		t.Fatal("expected channels object to be rejected")
+	}
+}

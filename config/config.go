@@ -18,7 +18,7 @@ type Config struct {
 	Profiles   map[string]*ProfileConfig   `json:"profiles" yaml:"profiles"`
 	Providers  map[string]*ProviderConfig  `json:"providers" yaml:"providers"` // Provider configurations
 	McpServers map[string]*McpServerConfig `json:"mcpServers,omitempty"`
-	Channels   map[string]any              `json:"channels,omitempty" yaml:"channels,omitempty"`
+	Channels   []json.RawMessage           `json:"channels,omitempty" yaml:"channels,omitempty"`
 	// ChannelsEnabled controls whether desktop should run the remote channel gateway.
 	ChannelsEnabled *bool                      `json:"channelsEnabled,omitempty" yaml:"channelsEnabled,omitempty"`
 	Tools           map[string]json.RawMessage `json:"tools,omitempty" yaml:"tools,omitempty"`
@@ -181,7 +181,7 @@ func NewConfig() *Config {
 		Profiles:   map[string]*ProfileConfig{},
 		Providers:  map[string]*ProviderConfig{},
 		McpServers: map[string]*McpServerConfig{},
-		Channels:   map[string]any{},
+		Channels:   []json.RawMessage{},
 	}
 	Normalize(cfg)
 	return cfg
@@ -209,7 +209,7 @@ func Normalize(cfg *Config) {
 		cfg.McpServers = map[string]*McpServerConfig{}
 	}
 	if cfg.Channels == nil {
-		cfg.Channels = map[string]any{}
+		cfg.Channels = []json.RawMessage{}
 	}
 	for id, server := range cfg.McpServers {
 		if server.Type == "" {
