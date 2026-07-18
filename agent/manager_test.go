@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -56,6 +57,40 @@ func TestResolveAgentNameReportsEmptyProfiles(t *testing.T) {
 
 	if _, err := m.resolveAgentName("default"); err == nil {
 		t.Fatal("resolveAgentName succeeded, want error")
+	}
+}
+
+func TestNewSessionUsesRequestedProfileAndListsMetadata(t *testing.T) {
+	previousPath := config.ConfigPath
+	config.ConfigPath = t.TempDir()
+	t.Cleanup(func() { config.ConfigPath = previousPath })
+
+	m := NewAgentManager(&config.Config{
+		Profiles: map[string]*config.ProfileConfig{
+			"default": {Provider: "openai", ModelName: "gpt-4"},
+			"coding":  {Provider: "openai", ModelName: "gpt-5"},
+		},
+		Providers: map[string]*config.ProviderConfig{},
+	})
+	created, err := m.NewSession(context.Background(), &acp.NewSessionRequest{
+		Meta: acp.Meta{acp.MiyaProfileMetaKey: "coding"},
+	}, &recordingSender{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if got := created.Meta[acp.MiyaProfileMetaKey]; got != "coding" {
+		t.Fatalf("created profile = %v, want coding", got)
+	}
+
+	listed, err := m.ListSessions(context.Background(), &acp.ListSessionsRequest{})
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(listed.Sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(listed.Sessions))
+	}
+	if got := listed.Sessions[0].Meta[acp.MiyaProfileMetaKey]; got != "coding" {
+		t.Fatalf("listed profile = %v, want coding", got)
 	}
 }
 

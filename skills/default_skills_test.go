@@ -6,9 +6,16 @@ import (
 )
 
 func TestDefaultSkillsLoad(t *testing.T) {
-	loaded, err := LoadSkillsFromDirectory(filepath.Join("..", "default-skills"))
+	disk, err := LoadSkillsFromDirectory(filepath.Join("..", "default-skills"))
 	if err != nil {
 		t.Fatalf("load default skills: %v", err)
+	}
+	loaded, err := LoadDefaultSkills()
+	if err != nil {
+		t.Fatalf("load embedded default skills: %v", err)
+	}
+	if len(loaded) != len(disk) {
+		t.Fatalf("embedded skills = %d, disk skills = %d", len(loaded), len(disk))
 	}
 	if len(loaded) == 0 {
 		t.Fatal("expected default skills to load")

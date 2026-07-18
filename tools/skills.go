@@ -19,6 +19,13 @@ type SkillsTool struct {
 
 func (t *SkillsTool) reloadSkillsFromDirectory() (err error) {
 	t.skills = map[string]*skills.Skill{}
+	defaults, err := skills.LoadDefaultSkills()
+	if err != nil {
+		return fmt.Errorf("load default skills: %w", err)
+	}
+	for _, skill := range defaults {
+		t.skills[skill.Name] = skill
+	}
 	files, err := skills.LoadSkillsFromDirectory(t.Workspace)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -27,6 +34,7 @@ func (t *SkillsTool) reloadSkillsFromDirectory() (err error) {
 		return
 	}
 	for _, skill := range files {
+		// User skills intentionally override bundled defaults by name.
 		t.skills[skill.Name] = skill
 	}
 	return

@@ -19,6 +19,8 @@ type RequestID any // string | number | null
 // Meta is a generic metadata container.
 type Meta = map[string]any
 
+const MiyaProfileMetaKey = "miya.profile"
+
 // === Capabilities ===
 
 type ClientCapabilities struct {

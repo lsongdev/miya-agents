@@ -171,7 +171,8 @@ func (m *Manager) Authenticate(ctx context.Context, req *acp.AuthenticateRequest
 }
 
 func (m *Manager) NewSession(ctx context.Context, req *acp.NewSessionRequest, sender acp.SessionUpdateSender) (*acp.NewSessionResponse, error) {
-	agentName, err := m.defaultAgentName()
+	requestedProfile, _ := req.Meta[acp.MiyaProfileMetaKey].(string)
+	agentName, err := m.resolveAgentName(strings.TrimSpace(requestedProfile))
 	if err != nil {
 		return nil, err
 	}
@@ -187,6 +188,7 @@ func (m *Manager) NewSession(ctx context.Context, req *acp.NewSessionRequest, se
 
 	return &acp.NewSessionResponse{
 		SessionID: acp.SessionID(sess.ID),
+		Meta:      acp.Meta{acp.MiyaProfileMetaKey: agentName},
 	}, nil
 }
 
@@ -344,6 +346,7 @@ func (m *Manager) ListSessions(ctx context.Context, req *acp.ListSessionsRequest
 			SessionID: acp.SessionID(s.ID),
 			Title:     title,
 			UpdatedAt: updatedAt,
+			Meta:      acp.Meta{acp.MiyaProfileMetaKey: s.AgentName},
 		})
 	}
 	return &acp.ListSessionsResponse{Sessions: infos}, nil

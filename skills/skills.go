@@ -4,10 +4,12 @@ package skills
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	defaultskills "github.com/lsongdev/miya-agents/default-skills"
 	"gopkg.in/yaml.v3"
 )
 
@@ -78,6 +80,37 @@ func LoadSkillsFromDirectory(dir string) (skills []*Skill, err error) {
 		}
 	}
 	return
+}
+
+// LoadDefaultSkills returns the skills compiled into miya-agents.
+func LoadDefaultSkills() ([]*Skill, error) {
+	entries, err := fs.ReadDir(defaultskills.FS(), ".")
+	if err != nil {
+		return nil, err
+	}
+	loaded := make([]*Skill, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		data, err := fs.ReadFile(defaultskills.FS(), filepath.ToSlash(filepath.Join(entry.Name(), "SKILL.md")))
+		if err != nil {
+			return nil, fmt.Errorf("read default skill %s: %w", entry.Name(), err)
+		}
+		skill, body, err := ParseSkillFrontmatter(string(data))
+		if err != nil {
+			return nil, fmt.Errorf("parse default skill %s: %w", entry.Name(), err)
+		}
+		if skill == nil {
+			skill = &Skill{Name: entry.Name()}
+		}
+		if skill.Name == "" {
+			skill.Name = entry.Name()
+		}
+		skill.Prompt = body
+		loaded = append(loaded, skill)
+	}
+	return loaded, nil
 }
 
 // loadDirectorySkill loads a skill from a directory containing SKILL.md.
