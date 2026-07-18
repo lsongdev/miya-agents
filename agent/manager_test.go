@@ -94,6 +94,20 @@ func TestNewSessionUsesRequestedProfileAndListsMetadata(t *testing.T) {
 	}
 }
 
+func TestNewSessionRejectsUnknownRequestedProfile(t *testing.T) {
+	m := NewAgentManager(&config.Config{
+		Profiles: map[string]*config.ProfileConfig{
+			"default": {Provider: "openai", ModelName: "gpt-4"},
+		},
+	})
+	_, err := m.NewSession(context.Background(), &acp.NewSessionRequest{
+		Meta: acp.Meta{acp.MiyaProfileMetaKey: "missing"},
+	}, &recordingSender{})
+	if err == nil {
+		t.Fatal("NewSession succeeded, want unknown profile error")
+	}
+}
+
 func TestUseAgentIncludesConfiguredMCPTools(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {

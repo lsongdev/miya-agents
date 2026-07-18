@@ -26,15 +26,17 @@ The root object may contain these fields:
 }
 ```
 
-`agents` is an array of ACP endpoints that Miya channels or other clients can call.
+`agents` is the unified catalog used for session creation and grouping. A built-in
+agent references one profile; external agents describe their ACP endpoint.
 
 ```json
 {
-  "id": "default",
-  "name": "Default Agent",
+  "id": "miya-default",
+  "name": "Miya Default",
   "enabled": true,
-  "type": "stdio",
-  "command": "miya",
+  "type": "builtin",
+  "profile": "default",
+  "command": "miya-agent",
   "args": ["acp"],
   "url": "",
   "headers": {}
@@ -43,12 +45,12 @@ The root object may contain these fields:
 
 Valid agent `type` values are:
 
-- `builtin`: use the embedded desktop agent runtime when supported by the host application.
+- `builtin`: use the Miya runtime. `profile` is required and selects the runtime profile.
 - `stdio`: start an ACP process with `command` and optional `args`.
 - `http`: connect to an HTTP ACP endpoint with `url`.
 - `sse`: connect to an SSE ACP endpoint with `url`.
 
-`profiles` defines model/runtime defaults. The `default` profile is the conventional fallback.
+`profiles` defines reusable model/runtime settings. Sessions bind to agents, not directly to profiles.
 
 ```json
 {
@@ -115,17 +117,18 @@ Provider `type` defaults to `openai` when omitted. Use `anthropic` for Anthropic
 
 ## Minimal Examples
 
-Basic local ACP agent:
+Basic built-in agent:
 
 ```json
 {
   "agents": [
     {
-      "id": "default",
-      "name": "Default Agent",
+      "id": "miya-default",
+      "name": "Miya Default",
       "enabled": true,
-      "type": "stdio",
-      "command": "miya",
+      "type": "builtin",
+      "profile": "default",
+      "command": "miya-agent",
       "args": ["acp"]
     }
   ],
@@ -157,11 +160,12 @@ Multiple ACP agents:
 {
   "agents": [
     {
-      "id": "default",
-      "name": "Default Agent",
+      "id": "miya-default",
+      "name": "Miya Default",
       "enabled": true,
-      "type": "stdio",
-      "command": "miya",
+      "type": "builtin",
+      "profile": "default",
+      "command": "miya-agent",
       "args": ["acp"]
     },
     {
@@ -185,7 +189,7 @@ Channel instance bound to an agent:
       "id": "telegram-main",
       "type": "telegram",
       "enabled": true,
-      "agent": "default",
+  "agent": "miya-default",
       "responseLevel": "messages",
       "options": {
         "botToken": "YOUR_TELEGRAM_BOT_TOKEN"

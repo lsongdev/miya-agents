@@ -172,7 +172,17 @@ func (m *Manager) Authenticate(ctx context.Context, req *acp.AuthenticateRequest
 
 func (m *Manager) NewSession(ctx context.Context, req *acp.NewSessionRequest, sender acp.SessionUpdateSender) (*acp.NewSessionResponse, error) {
 	requestedProfile, _ := req.Meta[acp.MiyaProfileMetaKey].(string)
-	agentName, err := m.resolveAgentName(strings.TrimSpace(requestedProfile))
+	requestedProfile = strings.TrimSpace(requestedProfile)
+	var agentName string
+	var err error
+	if requestedProfile != "" {
+		if _, ok := m.config.Profiles[requestedProfile]; !ok {
+			return nil, fmt.Errorf("profile not found: %s", requestedProfile)
+		}
+		agentName = requestedProfile
+	} else {
+		agentName, err = m.defaultAgentName()
+	}
 	if err != nil {
 		return nil, err
 	}
