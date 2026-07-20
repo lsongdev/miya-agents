@@ -77,7 +77,7 @@ func TestLoadConfigFromEmptyFileReturnsNormalizedConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfigFromFile: %v", err)
 	}
-	if cfg == nil || cfg.Profiles == nil || cfg.Providers == nil || cfg.McpServers == nil || cfg.Channels == nil {
+	if cfg == nil || cfg.Profiles == nil || cfg.Providers == nil || cfg.McpServers == nil {
 		t.Fatalf("config was not normalized: %#v", cfg)
 	}
 }

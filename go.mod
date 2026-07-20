@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/PuerkitoBio/goquery v1.11.0
-	github.com/lsongdev/jsonrpc-go v0.0.0-20260311082853-00cacf7253d3
+	github.com/lsongdev/jsonrpc-go v0.0.0-20260723121620-843eb7a8375d
 	golang.org/x/term v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
 )

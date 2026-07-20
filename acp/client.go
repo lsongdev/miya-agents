@@ -1,7 +1,6 @@
 package acp
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,12 +9,15 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+
+	"github.com/lsongdev/jsonrpc-go/jsonrpc/common"
+	"github.com/lsongdev/jsonrpc-go/jsonrpc/transports"
+	"github.com/lsongdev/miya-agents/process"
 )
 
 // Client is an ACP client that communicates with an ACP agent over stdio.
 type Client struct {
-	stdin          io.WriteCloser
-	stdoutCloser   io.Closer
+	transport      common.Transport
 	writeMu        sync.Mutex
 	id             atomic.Int64
 	onNotification NotificationHandler
@@ -45,7 +47,7 @@ func (c *Client) OnRequest(handler ClientHandler) {
 // Agent stderr is forwarded to the parent process's stderr for visibility.
 func DialStdio(command string, args ...string) (*Client, error) {
 	cmd := exec.Command(command, args...)
-	configureCommand(cmd)
+	process.ConfigureCommand(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("acp: stdin pipe: %w", err)
@@ -66,14 +68,11 @@ func DialStdio(command string, args ...string) (*Client, error) {
 // NewClient creates an ACP client from the given read/writer.
 func NewClient(stdin io.WriteCloser, stdout io.Reader) *Client {
 	client := &Client{
-		stdin:   stdin,
-		pending: make(map[int64]chan clientResponse),
-		closed:  make(chan struct{}),
+		transport: transports.NewStdioTransport(stdin, stdout),
+		pending:   make(map[int64]chan clientResponse),
+		closed:    make(chan struct{}),
 	}
-	if closer, ok := stdout.(io.Closer); ok {
-		client.stdoutCloser = closer
-	}
-	go client.readLoop(stdout)
+	go client.readLoop()
 	return client
 }
 
@@ -86,12 +85,6 @@ func (c *Client) sendRecv(method string, params, result any) error {
 		Params:  params,
 	}
 
-	data, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("acp: marshal request: %w", err)
-	}
-	data = append(data, '\n')
-
 	respCh := make(chan clientResponse, 1)
 	c.pendingMu.Lock()
 	c.pending[id] = respCh
@@ -99,7 +92,7 @@ func (c *Client) sendRecv(method string, params, result any) error {
 	defer c.removePending(id)
 
 	c.writeMu.Lock()
-	_, err = c.stdin.Write(data)
+	err := c.transport.Send(context.Background(), req)
 	c.writeMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("acp: write request: %w", err)
@@ -121,10 +114,9 @@ func (c *Client) sendRecv(method string, params, result any) error {
 	}
 }
 
-func (c *Client) readLoop(stdout io.Reader) {
-	reader := bufio.NewReaderSize(stdout, 64*1024)
+func (c *Client) readLoop() {
 	for {
-		line, readErr := reader.ReadBytes('\n')
+		line, readErr := c.transport.Recv(context.Background())
 		if len(line) > 0 {
 			c.handleFrame(trimFrame(line))
 		}
@@ -297,14 +289,9 @@ func (c *Client) writeError(id any, code int, message string) {
 }
 
 func (c *Client) writeJSON(v any) {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return
-	}
-	data = append(data, '\n')
 	c.writeMu.Lock()
-	_, _ = c.stdin.Write(data)
-	c.writeMu.Unlock()
+	defer c.writeMu.Unlock()
+	_ = c.transport.Send(context.Background(), v)
 }
 
 func responseID(id any) (int64, bool) {
@@ -347,15 +334,7 @@ func (c *Client) SendNotification(method string, params any) error {
 		Params:  params,
 	}
 
-	data, err := json.Marshal(notif)
-	if err != nil {
-		return fmt.Errorf("acp: marshal notification: %w", err)
-	}
-	data = append(data, '\n')
-
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	if _, err := c.stdin.Write(data); err != nil {
+	if err := c.transport.Send(context.Background(), notif); err != nil {
 		return fmt.Errorf("acp: write notification: %w", err)
 	}
 	return nil
@@ -518,14 +497,7 @@ type jsonrpcRequest struct {
 // Close closes the client's stdin, signaling EOF to the agent.
 func (c *Client) Close() error {
 	var err error
-	if c.stdin != nil {
-		err = c.stdin.Close()
-	}
-	if c.stdoutCloser != nil {
-		if closeErr := c.stdoutCloser.Close(); err == nil {
-			err = closeErr
-		}
-	}
+	err = c.transport.Close()
 	c.closePending(fmt.Errorf("acp: connection closed"))
 	return err
 }

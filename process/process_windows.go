@@ -1,4 +1,4 @@
-package acp
+package process
 
 import (
 	"os/exec"
@@ -7,7 +7,7 @@ import (
 
 const createNoWindow = 0x08000000
 
-func configureCommand(cmd *exec.Cmd) {
+func ConfigureCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: createNoWindow,

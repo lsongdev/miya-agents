@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/process"
 )
 
 const (
@@ -125,7 +126,7 @@ func shellCommand(ctx context.Context, command string) *exec.Cmd {
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", command)
 	}
-	configureShellCommand(cmd)
+	process.ConfigureCommand(cmd)
 	return cmd
 }
 
