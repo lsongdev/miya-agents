@@ -10,7 +10,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 
@@ -138,6 +140,7 @@ type McpServerConfig struct {
 // For example: NewStdioClient("npx", "-y", "12306-mcp")
 func NewStdioClient(server *McpServerConfig) (*Client, error) {
 	cmd := exec.Command(server.Command, server.Args...)
+	cmd.Env = environmentWithOverrides(os.Environ(), server.Env)
 	configureCommand(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -159,6 +162,36 @@ func NewStdioClient(server *McpServerConfig) (*Client, error) {
 
 	transport := transports.NewStdioTransport(stdin, stdout)
 	return NewClient(transport), nil
+}
+
+func environmentWithOverrides(base []string, overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(overrides))
+	for key := range overrides {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	overridden := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		overridden[key] = struct{}{}
+	}
+	environment := make([]string, 0, len(base)+len(keys))
+	for _, entry := range base {
+		key, _, found := strings.Cut(entry, "=")
+		if found {
+			if _, exists := overridden[key]; exists {
+				continue
+			}
+		}
+		environment = append(environment, entry)
+	}
+	for _, key := range keys {
+		environment = append(environment, key+"="+overrides[key])
+	}
+	return environment
 }
 
 func NewHTTPClient(server *McpServerConfig) (*Client, error) {
