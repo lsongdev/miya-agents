@@ -1,6 +1,6 @@
 # miya agents
 
-![miya](./miya.jpg)
+![miya](./miya.png)
 
 ## License
 
