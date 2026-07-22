@@ -190,6 +190,10 @@ func LoadConfigFromFile(path string) (cfg *Config, err error) {
 	if len(data) == 0 {
 		return NewConfig(), nil
 	}
+	data, err = ResolveCredentialReferences(data)
+	if err != nil {
+		return nil, fmt.Errorf("resolve config credentials: %w", err)
+	}
 	if err = json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
