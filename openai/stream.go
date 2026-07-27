@@ -59,6 +59,10 @@ func (b *MessageBuilder) Update(delta ChatCompletionMessage) {
 			last.Function.Name += tc.Function.Name
 			last.Function.Arguments += tc.Function.Arguments
 			b.idxMap[tc.Index] = last
+		} else {
+			tcCopy := tc
+			b.toolCalls = append(b.toolCalls, &tcCopy)
+			b.idxMap[tc.Index] = b.toolCalls[len(b.toolCalls)-1]
 		}
 	}
 }

@@ -90,8 +90,8 @@ func TestCreateChatCompletion(t *testing.T) {
 			Model:   "gpt-4",
 			Created: 1234567890,
 			Choices: []ChatCompletionChoice{{
-				Index:   0,
-				Message: &ChatCompletionMessage{Role: "assistant", Content: "Hello!"},
+				Index:        0,
+				Message:      &ChatCompletionMessage{Role: "assistant", Content: "Hello!"},
 				FinishReason: "stop",
 			}},
 			Usage: &CompletionUsage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8},
@@ -203,6 +203,59 @@ func TestCreateChatCompletionStream_ContextCancel(t *testing.T) {
 	cancel()
 
 	for range ch {
+	}
+}
+
+func TestCreateChatCompletionStream_ReportsPrematureClose(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		data, _ := json.Marshal(ChatCompletionResponse{
+			Choices: []ChatCompletionChoice{{
+				Index: 0,
+				Delta: &ChatCompletionMessage{Role: RoleAssistant, Content: "partial"},
+			}},
+		})
+		fmt.Fprintf(w, "data: %s\n\n", data)
+	}))
+	defer server.Close()
+
+	c, _ := NewClient(&Configuration{API: server.URL, APIKey: "test-key"})
+	ch, err := c.CreateChatCompletionStream(context.Background(), &ChatCompletionRequest{
+		Model: "gpt-4", Stream: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateChatCompletionStream: %v", err)
+	}
+
+	var streamErr *Error
+	for chunk := range ch {
+		if chunk.Error != nil {
+			streamErr = chunk.Error
+		}
+	}
+	if streamErr == nil || streamErr.Type != "stream_error" {
+		t.Fatalf("stream error = %#v, want stream_error", streamErr)
+	}
+}
+
+func TestCreateChatCompletionStream_ReportsInvalidEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: not-json\n\n")
+	}))
+	defer server.Close()
+
+	c, _ := NewClient(&Configuration{API: server.URL, APIKey: "test-key"})
+	ch, err := c.CreateChatCompletionStream(context.Background(), &ChatCompletionRequest{
+		Model: "gpt-4", Stream: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateChatCompletionStream: %v", err)
+	}
+
+	chunk := <-ch
+	if chunk.Error == nil || !strings.Contains(chunk.Error.Message, "decode stream event") {
+		t.Fatalf("stream error = %#v", chunk.Error)
 	}
 }
 

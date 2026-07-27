@@ -13,10 +13,14 @@ import (
 	"github.com/lsongdev/miya-agents/tools"
 )
 
+type LLM interface {
+	CreateChatCompletionStream(context.Context, *openai.ChatCompletionRequest) (<-chan openai.ChatCompletionResponse, error)
+}
+
 type Agent struct {
 	Name   string
 	Config *config.ProfileConfig
-	LLM    *openai.Client
+	LLM    LLM
 	// tools
 	toolsMap  map[string]openai.Tool
 	toolsDefs []openai.ToolDef
@@ -30,56 +34,37 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 			Tools:    a.toolsDefs,
 			Stream:   true,
 		}
-		var respMessage openai.ChatCompletionMessage
-		if req.Stream {
-			resp, err := a.LLM.CreateChatCompletionStream(ctx, &req)
-			if err != nil {
-				err = fmt.Errorf("Error: failed to create chat completion stream: %v", err)
-				return err
+		resp, err := a.LLM.CreateChatCompletionStream(ctx, &req)
+		if err != nil {
+			return fmt.Errorf("failed to create chat completion stream: %w", err)
+		}
+		builder := openai.NewMessageBuilder()
+		for chunk := range resp {
+			if chunk.Error != nil {
+				return fmt.Errorf("API error: %s", chunk.Error.Message)
 			}
-			builder := openai.NewMessageBuilder()
-			for chunk := range resp {
-				if chunk.Error != nil {
-					return fmt.Errorf("API error: %s", chunk.Error.Message)
-				}
-				m := chunk.GetMessage()
-				if m == nil {
-					continue
-				}
-				builder.Update(*m)
-				if m.ReasoningContent != "" {
-					if err := sink.ThoughtDelta(m.ReasoningContent); err != nil {
-						return err
-					}
-				}
-				if m.Content != "" {
-					if err := sink.AssistantDelta(m.Content); err != nil {
-						return err
-					}
-				}
-			}
-			respMessage = builder.Build()
-		} else {
-			resp, err := a.LLM.CreateChatCompletion(ctx, &req)
-			if err != nil {
-				err = fmt.Errorf("Error failed to create chat completion: %v", err)
-				return err
-			}
-			m := resp.GetMessage()
+			m := chunk.GetMessage()
 			if m == nil {
-				return fmt.Errorf("no message in response")
+				continue
 			}
-			respMessage = *m
-			if respMessage.ReasoningContent != "" {
-				if err := sink.ThoughtDelta(respMessage.ReasoningContent); err != nil {
+			builder.Update(*m)
+			if m.ReasoningContent != "" {
+				if err := sink.ThoughtDelta(m.ReasoningContent); err != nil {
 					return err
 				}
 			}
-			if respMessage.Content != "" {
-				if err := sink.AssistantDelta(respMessage.Content); err != nil {
+			if m.Content != "" {
+				if err := sink.AssistantDelta(m.Content); err != nil {
 					return err
 				}
 			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		respMessage := builder.Build()
+		if respMessage.IsEmpty() {
+			return fmt.Errorf("chat completion stream closed without a response")
 		}
 		sess.AppendResponse(respMessage)
 		// finish
@@ -88,7 +73,9 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 				return err
 			}
 			a.AppendContextMaintenanceNotice(sess)
-			sess.SaveMessages()
+			if err := sess.Save(); err != nil {
+				return fmt.Errorf("save session: %w", err)
+			}
 			if err := sink.Done(); err != nil {
 				return err
 			}
@@ -97,10 +84,9 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 		// Execute tool calls
 		for _, tc := range respMessage.ToolCalls {
 			if tc.ID == "" {
-				continue
+				return fmt.Errorf("tool call %q is missing an id", tc.Function.Name)
 			}
 			tool, ok := a.toolsMap[tc.Function.Name]
-			var result string
 			if err := sink.ToolCallStart(ToolCallEvent{
 				ID:        tc.ID,
 				Name:      tc.Function.Name,
@@ -110,6 +96,8 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 			}); err != nil {
 				return err
 			}
+			var result string
+			status := "completed"
 			if ok {
 				result = tool.Run(ctx, tc.Function.Arguments)
 				if tc.Function.Name == "attach_file" {
@@ -121,11 +109,8 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 					}
 				}
 			} else {
-				result = fmt.Sprintf("Error: unknown tool '%s'", tc.Function.Name)
-			}
-			status := "completed"
-			if !ok {
 				status = "failed"
+				result = fmt.Sprintf("Error: unknown tool '%s'", tc.Function.Name)
 			}
 			if err := sink.ToolCallDone(ToolCallEvent{
 				ID:        tc.ID,
@@ -139,7 +124,9 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 			}
 			sess.Messages = append(sess.Messages, openai.ToolResultMessage(tc.ID, tc.Function.Name, result))
 		}
-		sess.SaveMessages()
+		if err := sess.Save(); err != nil {
+			return fmt.Errorf("save session: %w", err)
+		}
 	}
 }
 

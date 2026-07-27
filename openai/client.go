@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 
@@ -281,12 +280,29 @@ func (c *Client) CreateChatCompletionStream(ctx context.Context, request *ChatCo
 
 	go func() {
 		defer close(resp)
+		sendError := func(err error) {
+			select {
+			case resp <- ChatCompletionResponse{
+				Error: &Error{Message: err.Error(), Type: "stream_error"},
+			}:
+			case <-ctx.Done():
+			}
+		}
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case evt, ok := <-stream.Events:
 				if !ok {
+					select {
+					case err, ok := <-stream.Err():
+						if ok && err != nil {
+							sendError(fmt.Errorf("sse stream: %w", err))
+							return
+						}
+					default:
+					}
+					sendError(io.ErrUnexpectedEOF)
 					return
 				}
 				if evt.Data == "[DONE]" {
@@ -294,13 +310,20 @@ func (c *Client) CreateChatCompletionStream(ctx context.Context, request *ChatCo
 				}
 				var chunk ChatCompletionResponse
 				if err := json.Unmarshal([]byte(evt.Data), &chunk); err != nil {
-					log.Println(err)
-					continue
+					sendError(fmt.Errorf("decode stream event: %w", err))
+					return
 				}
-				resp <- chunk
-			case err := <-stream.Err():
-				if err != nil {
-					log.Println("sse error:", err)
+				select {
+				case resp <- chunk:
+					continue
+				case <-ctx.Done():
+					return
+				}
+			case err, ok := <-stream.Err():
+				if ok && err != nil {
+					sendError(fmt.Errorf("sse stream: %w", err))
+				} else {
+					sendError(io.ErrUnexpectedEOF)
 				}
 				return
 			}

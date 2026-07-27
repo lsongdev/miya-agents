@@ -26,9 +26,9 @@ type FileEvent struct {
 type UsageEvent struct{}
 
 type EventSink interface {
+	ThoughtDelta(text string) error
 	AssistantDelta(text string) error
 	AssistantFile(event FileEvent) error
-	ThoughtDelta(text string) error
 	ToolCallStart(event ToolCallEvent) error
 	ToolCallDone(event ToolCallEvent) error
 	SessionInfo(event SessionInfoEvent) error
