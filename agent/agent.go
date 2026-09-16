@@ -50,7 +50,10 @@ func (a *Agent) toolDefs() []openai.ToolDef {
 	return defs
 }
 
-func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink EventSink) error {
+// Run advances sess until the agent finishes its turn. Persistence is owned by
+// the caller; the same loop can therefore run persistent user sessions or
+// ephemeral delegated tasks.
+func (a *Agent) Run(ctx context.Context, sess *session.Session, sink EventSink) error {
 	if a.Stream == nil {
 		return fmt.Errorf("agent has no model stream")
 	}
@@ -99,9 +102,6 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 				return err
 			}
 			a.AppendContextMaintenanceNotice(sess)
-			if err := sess.Save(); err != nil {
-				return fmt.Errorf("save session: %w", err)
-			}
 			if err := sink.Done(); err != nil {
 				return err
 			}
@@ -150,10 +150,12 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 			}
 			sess.Messages = append(sess.Messages, openai.ToolResultMessage(tc.ID, tc.Function.Name, result))
 		}
-		if err := sess.Save(); err != nil {
-			return fmt.Errorf("save session: %w", err)
-		}
 	}
+}
+
+// RunAgentLoop is kept for callers using the previous name.
+func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink EventSink) error {
+	return a.Run(ctx, sess, sink)
 }
 
 func emitAttachedFileResult(sink EventSink, result string) (string, bool, error) {
@@ -209,26 +211,4 @@ func (a *Agent) readSystemPrompt() string {
 		return "You are a helpful assistant."
 	}
 	return string(data)
-}
-
-func (a *Agent) BuildTools() {
-	workspace := a.Config.GetWorkspace()
-	if workspace != "" {
-		_ = os.MkdirAll(workspace, 0755)
-	}
-	a.Use(
-		&tools.WebFetchTool{},
-		&tools.WebSearchTool{},
-		&tools.ReadFileTool{Workspace: workspace},
-		&tools.WriteFileTool{Workspace: workspace},
-		&tools.AppendFileTool{Workspace: workspace},
-		&tools.EditFileTool{Workspace: workspace},
-		&tools.AttachFileTool{Workspace: workspace},
-		&tools.ExecTool{
-			Workspace:           workspace,
-			DefaultTimeout:      tools.ExecDefaultTimeoutSeconds,
-			RestrictToWorkspace: true,
-		},
-		&tools.SkillsTool{Workspace: filepath.Join(config.ConfigPath, "skills")},
-	)
 }

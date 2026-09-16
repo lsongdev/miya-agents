@@ -18,6 +18,10 @@ import (
 	"github.com/lsongdev/miya-agents/tools"
 )
 
+const maxDelegateDepth = 4
+
+type delegateDepthKey struct{}
+
 type Manager struct {
 	config   *config.Config
 	sessions map[string]*session.Session
@@ -56,14 +60,76 @@ func (m *Manager) UseAgent(name string) (*Agent, error) {
 		return nil, fmt.Errorf("unsupported provider type %q", provider.Type)
 	}
 
-	a := New(name, profile, stream)
-	a.BuildTools()
-	mcpManager := tools.NewMcpManager(m.config.McpServers)
-	for _, tool := range mcpManager.Tools {
-		a.Use(tool)
+	agentTools, err := m.toolsFor(profile)
+	if err != nil {
+		return nil, fmt.Errorf("agent %q tools: %w", name, err)
 	}
-	a.Use(tools.NewSubagentTool(m))
-	return a, nil
+	return New(name, profile, stream).Use(agentTools...), nil
+}
+
+func (m *Manager) toolsFor(profile *config.ProfileConfig) ([]openai.Tool, error) {
+	workspace := profile.GetWorkspace()
+	if workspace != "" {
+		_ = os.MkdirAll(workspace, 0755)
+	}
+
+	available := []openai.Tool{
+		&tools.WebFetchTool{},
+		&tools.WebSearchTool{},
+		&tools.ReadFileTool{Workspace: workspace},
+		&tools.WriteFileTool{Workspace: workspace},
+		&tools.AppendFileTool{Workspace: workspace},
+		&tools.EditFileTool{Workspace: workspace},
+		&tools.AttachFileTool{Workspace: workspace},
+		&tools.ExecTool{
+			Workspace:           workspace,
+			DefaultTimeout:      tools.ExecDefaultTimeoutSeconds,
+			RestrictToWorkspace: true,
+		},
+		&tools.SkillsTool{Workspace: filepath.Join(config.ConfigPath, "skills")},
+		tools.NewDelegateTool(m.Delegate, m.agentDescriptions()),
+	}
+
+	needsMCP := len(profile.Tools) == 0
+	if !needsMCP {
+		for _, name := range profile.Tools {
+			if strings.HasPrefix(name, "mcp_") {
+				needsMCP = true
+				break
+			}
+		}
+	}
+	if needsMCP {
+		mcpManager := tools.NewMcpManager(m.config.McpServers)
+		for _, tool := range mcpManager.Tools {
+			available = append(available, tool)
+		}
+	}
+	if len(profile.Tools) == 0 {
+		return available, nil
+	}
+
+	byName := make(map[string]openai.Tool, len(available))
+	for _, tool := range available {
+		byName[tool.Def().Function.Name] = tool
+	}
+	selected := make([]openai.Tool, 0, len(profile.Tools))
+	for _, name := range profile.Tools {
+		tool, ok := byName[name]
+		if !ok {
+			return nil, fmt.Errorf("unknown tool %q", name)
+		}
+		selected = append(selected, tool)
+	}
+	return selected, nil
+}
+
+func (m *Manager) agentDescriptions() map[string]string {
+	agents := make(map[string]string, len(m.config.Profiles))
+	for name, profile := range m.config.Profiles {
+		agents[name] = profile.Description
+	}
+	return agents
 }
 
 func (m *Manager) defaultAgentName() (string, error) {
@@ -116,33 +182,31 @@ func (w *captureWriter) SessionInfo(event SessionInfoEvent) error { return nil }
 func (w *captureWriter) Usage(event UsageEvent) error             { return nil }
 func (w *captureWriter) Done() error                              { return nil }
 
-func (m *Manager) RunAgent(ctx context.Context, name, prompt string) (string, error) {
+// Delegate runs an agent with an isolated, in-memory session and returns only
+// its final output. Delegated agents are otherwise normal profile-backed agents.
+func (m *Manager) Delegate(ctx context.Context, name, task string) (string, error) {
+	depth, _ := ctx.Value(delegateDepthKey{}).(int)
+	if depth >= maxDelegateDepth {
+		return "", fmt.Errorf("maximum delegation depth %d reached", maxDelegateDepth)
+	}
 	ag, err := m.UseAgent(name)
 	if err != nil {
 		return "", err
 	}
 
 	sess := ag.NewSession()
-	sess.AppendRequest(prompt)
-	RecordUserMessage(sess, prompt)
-	if sess.Title == "" {
-		sess.Title = sess.DisplayTitle()
-	}
-
+	sess.AppendRequest(task)
 	writer := &captureWriter{}
-	sink := NewRecordingSink(sess, writer)
-	if sess.Title != "" {
-		if err := sink.SessionInfo(SessionInfoEvent{Title: sess.Title}); err != nil {
-			return "", err
+	ctx = context.WithValue(ctx, delegateDepthKey{}, depth+1)
+	if err := ag.Run(ctx, sess, writer); err != nil {
+		return "", fmt.Errorf("agent %q failed: %w", name, err)
+	}
+	for i := len(sess.Messages) - 1; i >= 0; i-- {
+		message := sess.Messages[i]
+		if message.Role == openai.RoleAssistant && !message.HasToolCall() && message.Content != "" {
+			return message.Content, nil
 		}
 	}
-	if err := sess.Save(); err != nil {
-		return "", fmt.Errorf("save session: %w", err)
-	}
-	if err := ag.RunAgentLoop(ctx, sess, sink); err != nil {
-		return "", fmt.Errorf("agent '%s' failed: %v", name, err)
-	}
-
 	return writer.sb.String(), nil
 }
 
@@ -246,7 +310,8 @@ func (m *Manager) Prompt(ctx context.Context, req *acp.PromptRequest, sender acp
 	if err := sess.Save(); err != nil {
 		return nil, fmt.Errorf("save session: %w", err)
 	}
-	if err := ag.RunAgentLoop(ctx, sess, sink); err != nil {
+	if err := ag.Run(ctx, sess, sink); err != nil {
+		_ = sess.Save()
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
 

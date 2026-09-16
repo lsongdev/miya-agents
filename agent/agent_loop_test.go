@@ -2,8 +2,6 @@ package agent
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -34,16 +32,16 @@ func (discardSink) SessionInfo(SessionInfoEvent) error { return nil }
 func (discardSink) Usage(UsageEvent) error             { return nil }
 func (discardSink) Done() error                        { return nil }
 
-func TestRunAgentLoopRejectsEmptyStream(t *testing.T) {
+func TestRunRejectsEmptyStream(t *testing.T) {
 	ag := New("test", &config.ProfileConfig{ModelName: "test"}, fakeStream())
 
-	err := ag.RunAgentLoop(context.Background(), session.New("test"), discardSink{})
+	err := ag.Run(context.Background(), session.New("test"), discardSink{})
 	if err == nil || !strings.Contains(err.Error(), "closed without a response") {
-		t.Fatalf("RunAgentLoop error = %v", err)
+		t.Fatalf("Run error = %v", err)
 	}
 }
 
-func TestRunAgentLoopRejectsInterruptedStream(t *testing.T) {
+func TestRunRejectsInterruptedStream(t *testing.T) {
 	message := openai.ChatCompletionMessage{Role: openai.RoleAssistant, Content: "partial"}
 	ag := New("test", &config.ProfileConfig{ModelName: "test"}, fakeStream(
 		openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{Index: 0, Delta: &message}}},
@@ -51,16 +49,16 @@ func TestRunAgentLoopRejectsInterruptedStream(t *testing.T) {
 	))
 	sess := session.New("test")
 
-	err := ag.RunAgentLoop(context.Background(), sess, discardSink{})
+	err := ag.Run(context.Background(), sess, discardSink{})
 	if err == nil || !strings.Contains(err.Error(), "connection reset") {
-		t.Fatalf("RunAgentLoop error = %v", err)
+		t.Fatalf("Run error = %v", err)
 	}
 	if len(sess.Messages) != 0 {
 		t.Fatalf("interrupted response was saved: %#v", sess.Messages)
 	}
 }
 
-func TestRunAgentLoopRejectsToolCallWithoutID(t *testing.T) {
+func TestRunRejectsToolCallWithoutID(t *testing.T) {
 	message := openai.ChatCompletionMessage{
 		Role: openai.RoleAssistant,
 		ToolCalls: []openai.ToolCall{{
@@ -71,19 +69,15 @@ func TestRunAgentLoopRejectsToolCallWithoutID(t *testing.T) {
 		openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{Index: 0, Delta: &message}}},
 	))
 
-	err := ag.RunAgentLoop(context.Background(), session.New("test"), discardSink{})
+	err := ag.Run(context.Background(), session.New("test"), discardSink{})
 	if err == nil || !strings.Contains(err.Error(), "missing an id") {
-		t.Fatalf("RunAgentLoop error = %v", err)
+		t.Fatalf("Run error = %v", err)
 	}
 }
 
-func TestRunAgentLoopReturnsSaveError(t *testing.T) {
+func TestRunDoesNotPersistSession(t *testing.T) {
 	oldConfigPath := config.ConfigPath
-	configPath := filepath.Join(t.TempDir(), "config-file")
-	if err := os.WriteFile(configPath, []byte("not a directory"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	config.ConfigPath = configPath
+	config.ConfigPath = t.TempDir()
 	t.Cleanup(func() { config.ConfigPath = oldConfigPath })
 
 	message := openai.ChatCompletionMessage{Role: openai.RoleAssistant, Content: "done"}
@@ -91,8 +85,14 @@ func TestRunAgentLoopReturnsSaveError(t *testing.T) {
 		openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{Index: 0, Delta: &message}}},
 	))
 
-	err := ag.RunAgentLoop(context.Background(), session.New("test"), discardSink{})
-	if err == nil || !strings.Contains(err.Error(), "save session") {
-		t.Fatalf("RunAgentLoop error = %v", err)
+	if err := ag.Run(context.Background(), session.New("test"), discardSink{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	sessions, err := session.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("Run persisted %d sessions, want 0", len(sessions))
 	}
 }

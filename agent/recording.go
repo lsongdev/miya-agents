@@ -70,6 +70,9 @@ func (s *recordingSink) Usage(event UsageEvent) error {
 }
 
 func (s *recordingSink) Done() error {
+	if err := s.sess.Save(); err != nil {
+		return err
+	}
 	return s.next.Done()
 }
 

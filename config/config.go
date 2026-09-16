@@ -128,13 +128,15 @@ type ProviderConfig struct {
 
 // ProfileConfig contains miya-agents runtime defaults.
 type ProfileConfig struct {
-	Provider            string  `json:"provider" yaml:"provider"`                                           // provider name, e.g. "openai"
-	ModelName           string  `json:"model,omitempty" yaml:"model"`                                       // model name, e.g. "deepseek-chat"
-	Workspace           string  `json:"workspace,omitempty" yaml:"workspace,omitempty"`                     // defaults to ~/.miya/workspace
-	MaxTokens           int     `json:"maxTokens,omitempty" yaml:"maxTokens,omitempty"`                     // defaults to 8192
-	Temperature         float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`                 // defaults to 0.95
-	ContextWindowTokens int     `json:"contextWindowTokens,omitempty" yaml:"contextWindowTokens,omitempty"` // defaults to 128000
-	ContextWarnRatio    float64 `json:"contextWarnRatio,omitempty" yaml:"contextWarnRatio,omitempty"`       // defaults to 0.9
+	Provider            string   `json:"provider" yaml:"provider"`                                           // provider name, e.g. "openai"
+	ModelName           string   `json:"model,omitempty" yaml:"model"`                                       // model name, e.g. "deepseek-chat"
+	Description         string   `json:"description,omitempty" yaml:"description,omitempty"`
+	Workspace           string   `json:"workspace,omitempty" yaml:"workspace,omitempty"`                     // defaults to ~/.miya/workspace
+	Tools               []string `json:"tools,omitempty" yaml:"tools,omitempty"`                             // empty uses the default tool set
+	MaxTokens           int      `json:"maxTokens,omitempty" yaml:"maxTokens,omitempty"`                     // defaults to 8192
+	Temperature         float64  `json:"temperature,omitempty" yaml:"temperature,omitempty"`                 // defaults to 0.95
+	ContextWindowTokens int      `json:"contextWindowTokens,omitempty" yaml:"contextWindowTokens,omitempty"` // defaults to 128000
+	ContextWarnRatio    float64  `json:"contextWarnRatio,omitempty" yaml:"contextWarnRatio,omitempty"`       // defaults to 0.9
 }
 
 func (ac *ProfileConfig) GetWorkspace() string {
