@@ -56,9 +56,12 @@ The public endpoints identify the client protocol:
 | --- | --- |
 | `/v1/chat/completions` | `openai.chat.v1` |
 | `/v1/responses` | `openai.responses.v1` |
+| `/v1/images/generations` | `openai.images.v1` |
 | `/v1/messages` | `anthropic.messages.v1` |
 
-Each handler decodes only `model` and `stream` before routing. If the selected
+Each chat handler decodes only `model` and `stream` before routing. The image
+handler validates `prompt`, defaults `model` to `gpt-image-2`, and forwards the
+JSON body unchanged otherwise. If the selected
 provider has the same native protocol, the original JSON is forwarded without
 decoding and re-encoding it. A configured public model alias may replace only
 the top-level `model` value.

@@ -30,6 +30,7 @@ const (
 	SourceClaudeCode        = providers.SourceClaudeCode
 	ProtocolOpenAIChat      = providers.ProtocolOpenAIChat
 	ProtocolOpenAIResponses = providers.ProtocolOpenAIResponses
+	ProtocolOpenAIImages    = providers.ProtocolOpenAIImages
 	ProtocolAnthropic       = providers.ProtocolAnthropic
 )
 
@@ -154,6 +155,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		env.ChatCompletions(w, req)
 	case "/v1/responses":
 		env.Responses(w, req)
+	case "/v1/images/generations":
+		env.ImageGenerations(w, req)
 	case "/v1/embeddings":
 		env.Embeddings(w, req)
 	default:

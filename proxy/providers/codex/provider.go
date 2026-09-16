@@ -34,6 +34,7 @@ func Provider(tokens providers.BearerSource, models ...string) *providers.Provid
 		Protocol:     providers.ProtocolOpenAIResponses,
 		BaseURL:      DefaultBaseURL,
 		Models:       models,
+		ImageModels:  []string{"gpt-image-2", "gpt-image-1.5"},
 		ModelCatalog: catalog,
 		Auth:         tokens,
 		AlwaysStream: true,

@@ -21,6 +21,7 @@ func (env *Env) Models(w http.ResponseWriter, r *http.Request) {
 	for _, p := range env.ListProviders() {
 		catalog = append(catalog, p.ModelCatalog...)
 		ids := append([]string(nil), p.Models...)
+		ids = append(ids, p.ImageModels...)
 		for id := range p.ModelAliases {
 			ids = append(ids, id)
 		}

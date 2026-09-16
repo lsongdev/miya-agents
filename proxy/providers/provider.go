@@ -27,6 +27,7 @@ const (
 
 	ProtocolOpenAIChat      Protocol = "openai.chat.v1"
 	ProtocolOpenAIResponses Protocol = "openai.responses.v1"
+	ProtocolOpenAIImages    Protocol = "openai.images.v1"
 	ProtocolAnthropic       Protocol = "anthropic.messages.v1"
 )
 
@@ -55,6 +56,7 @@ type Provider struct {
 	Headers          map[string]string
 	DefaultMaxTokens int
 	Models           []string
+	ImageModels      []string
 	ModelAliases     map[string]string
 	ModelCatalog     []map[string]any
 	Client           Client
@@ -91,12 +93,70 @@ func (p *Provider) SupportsModel(model string) bool {
 	return false
 }
 
+// SupportsImageModel reports whether the provider can serve the standalone
+// OpenAI Images API for model.
+func (p *Provider) SupportsImageModel(model string) bool {
+	for _, candidate := range p.ImageModels {
+		if candidate == model {
+			return true
+		}
+	}
+	// OpenAI-compatible API-key providers may advertise image models in their
+	// regular configured model map without a separate capability declaration.
+	return (p.Source == "" || p.Source == SourceOpenAI) && p.SupportsModel(model)
+}
+
 func (p *Provider) NewNativeRequest(ctx context.Context, protocol Protocol, body []byte) (*http.Request, error) {
 	return p.newRequest(ctx, protocol, body, false)
 }
 
 func (p *Provider) NewTranslatedRequest(ctx context.Context, protocol Protocol, body []byte) (*http.Request, error) {
 	return p.newRequest(ctx, protocol, body, true)
+}
+
+// NewEndpointRequest builds an authenticated request for a provider-relative
+// endpoint. It is used by capability endpoints such as the OpenAI Images API,
+// which are independent of a provider's primary chat protocol.
+func (p *Provider) NewEndpointRequest(ctx context.Context, method, endpoint string, body []byte) (*http.Request, error) {
+	body, err := p.rewriteModelAlias(body)
+	if err != nil {
+		return nil, fmt.Errorf("provider %q: rewrite model: %w", p.Name, err)
+	}
+	return p.newEndpointRequest(ctx, method, endpoint, body)
+}
+
+func (p *Provider) newEndpointRequest(ctx context.Context, method, endpoint string, body []byte) (*http.Request, error) {
+	target, err := p.endpointURL(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if p.Client != nil {
+		req, err := p.Client.NewRequest(ctx, method, target, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("provider %q: create request: %w", p.Name, err)
+		}
+		p.applyRequestHeaders(req)
+		return req, nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("provider %q: create request: %w", p.Name, err)
+	}
+	if p.Auth != nil {
+		token, headers, err := p.Auth.BearerToken()
+		if err != nil {
+			return nil, fmt.Errorf("provider %q: authenticate request: %w", p.Name, err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+	} else if p.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.APIKey)
+	}
+	p.applyRequestHeaders(req)
+	return req, nil
 }
 
 func (p *Provider) newRequest(ctx context.Context, protocol Protocol, body []byte, prepare bool) (*http.Request, error) {
@@ -117,33 +177,15 @@ func (p *Provider) newRequest(ctx context.Context, protocol Protocol, body []byt
 			return nil, fmt.Errorf("provider %q: prepare request: %w", p.Name, err)
 		}
 	}
-	var req *http.Request
-	if p.Client != nil {
-		req, err = p.Client.NewRequest(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	} else {
-		req, err = http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	}
-	if err != nil {
-		return nil, fmt.Errorf("provider %q: create request: %w", p.Name, err)
-	}
+	return p.newEndpointRequest(ctx, http.MethodPost, endpoint, body)
+}
+
+func (p *Provider) applyRequestHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	if p.Client == nil && p.Auth != nil {
-		token, headers, err := p.Auth.BearerToken()
-		if err != nil {
-			return nil, fmt.Errorf("provider %q: authenticate request: %w", p.Name, err)
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-		for key, value := range headers {
-			req.Header.Set(key, value)
-		}
-	} else if p.Client == nil && p.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+p.APIKey)
-	}
 	for key, value := range p.Headers {
 		req.Header.Set(key, value)
 	}
-	return req, nil
 }
 
 // SetHTTPClient binds the proxy's shared transport to the source client.
@@ -179,10 +221,6 @@ func (p *Provider) rewriteModelAlias(body []byte) ([]byte, error) {
 }
 
 func (p *Provider) nativeEndpoint(protocol Protocol) (string, error) {
-	base, err := url.Parse(strings.TrimRight(p.BaseURL, "/"))
-	if err != nil || base.Scheme == "" || base.Host == "" {
-		return "", fmt.Errorf("provider %q: invalid base URL %q", p.Name, p.BaseURL)
-	}
 	var suffix string
 	switch protocol {
 	case ProtocolOpenAIChat:
@@ -190,7 +228,8 @@ func (p *Provider) nativeEndpoint(protocol Protocol) (string, error) {
 	case ProtocolOpenAIResponses:
 		suffix = "responses"
 	case ProtocolAnthropic:
-		if path.Base(base.Path) == "v1" {
+		base, _ := url.Parse(strings.TrimRight(p.BaseURL, "/"))
+		if base != nil && path.Base(base.Path) == "v1" {
 			suffix = "messages"
 		} else {
 			suffix = "v1/messages"
@@ -198,6 +237,18 @@ func (p *Provider) nativeEndpoint(protocol Protocol) (string, error) {
 	default:
 		return "", fmt.Errorf("provider %q: unsupported native protocol %q", p.Name, protocol)
 	}
+	return p.endpointURL(suffix)
+}
+
+func (p *Provider) endpointURL(endpoint string) (string, error) {
+	base, err := url.Parse(strings.TrimRight(p.BaseURL, "/"))
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return "", fmt.Errorf("provider %q: invalid base URL %q", p.Name, p.BaseURL)
+	}
+	if parsed, err := url.Parse(endpoint); err == nil && parsed.IsAbs() {
+		return parsed.String(), nil
+	}
+	suffix := strings.TrimLeft(endpoint, "/")
 	base.Path = path.Join(base.Path, suffix)
 	return base.String(), nil
 }
