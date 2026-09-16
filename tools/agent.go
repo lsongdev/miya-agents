@@ -4,67 +4,85 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/lsongdev/miya-agents/openai"
 )
 
-// AgentRunner defines the interface for running an agent.
-// This avoids circular dependencies between the agent and tools packages.
-type AgentRunner interface {
-	RunAgent(ctx context.Context, name, prompt string) (string, error)
+type DelegateFunc func(context.Context, string, string) (string, error)
+
+type DelegateTool struct {
+	Delegate DelegateFunc
+	Agents   map[string]string
 }
 
-// SubagentTool is a tool that allows an agent to invoke another agent.
-type SubagentTool struct {
-	Runner AgentRunner
+func NewDelegateTool(delegate DelegateFunc, agents map[string]string) *DelegateTool {
+	return &DelegateTool{Delegate: delegate, Agents: agents}
 }
 
-// NewSubagentTool creates a new SubagentTool.
-func NewSubagentTool(runner AgentRunner) *SubagentTool {
-	return &SubagentTool{
-		Runner: runner,
+func (t *DelegateTool) Def() openai.ToolDef {
+	names := make([]string, 0, len(t.Agents))
+	for name := range t.Agents {
+		names = append(names, name)
 	}
-}
+	sort.Strings(names)
 
-// Def implements [openai.Tool].
-func (t *SubagentTool) Def() openai.ToolDef {
+	description := "Delegate a self-contained task to another agent. The delegated agent has an independent context and returns only its result."
+	if len(names) > 0 {
+		var agents strings.Builder
+		agents.WriteString(description + " Available agents:")
+		for _, name := range names {
+			agents.WriteString("\n- " + name)
+			if detail := strings.TrimSpace(t.Agents[name]); detail != "" {
+				agents.WriteString(": " + detail)
+			}
+		}
+		description = agents.String()
+	}
+
 	return openai.ToolDef{
 		Type: "function",
 		Function: openai.FunctionDef{
-			Name:        "invoke_agent",
-			Description: "Invoke a specialized sub-agent to perform a specific task or investigation. Use this to delegate complex or repetitive work.",
+			Name:        "delegate",
+			Description: description,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"agent_name": map[string]any{
-						"type":        "string",
-						"description": "Name of the sub-agent to invoke.",
+					"agent": map[string]any{
+						"type": "string",
+						"enum": names,
+						"description": "Agent profile to run the task.",
 					},
-					"prompt": map[string]any{
+					"task": map[string]any{
 						"type":        "string",
-						"description": "The COMPLETE query to send the subagent. MUST be comprehensive and detailed.",
+						"description": "Complete, self-contained task for the delegated agent.",
 					},
 				},
-				"required": []string{"agent_name", "prompt"},
+				"required": []string{"agent", "task"},
 			},
 		},
 	}
 }
 
-// Run implements [openai.Tool].
-func (t *SubagentTool) Run(ctx context.Context, args string) string {
+func (t *DelegateTool) Run(ctx context.Context, args string) string {
 	var input struct {
-		AgentName string `json:"agent_name"`
-		Prompt    string `json:"prompt"`
+		Agent string `json:"agent"`
+		Task  string `json:"task"`
 	}
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return fmt.Sprintf("Error: failed to parse arguments: %v", err)
 	}
+	if strings.TrimSpace(input.Agent) == "" || strings.TrimSpace(input.Task) == "" {
+		return "Error: agent and task are required"
+	}
+	if t.Delegate == nil {
+		return "Error: delegation is not configured"
+	}
 
-	result, err := t.Runner.RunAgent(ctx, input.AgentName, input.Prompt)
+	result, err := t.Delegate(ctx, input.Agent, input.Task)
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
-
 	return result
 }
