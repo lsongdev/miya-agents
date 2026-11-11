@@ -302,3 +302,52 @@ func TestLegacySessionIsConvertedOnce(t *testing.T) {
 		t.Fatalf("after append: %#v", infos)
 	}
 }
+
+func TestCompactionReplacesOlderContextButNotTheLog(t *testing.T) {
+	useTempSessions(t)
+
+	sess, err := Create("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.AddMessage(
+		llm.UserText("first"),           // id 2
+		llm.AssistantText("answer one"), // id 3
+		llm.UserText("second"),          // id 4
+		llm.AssistantText("answer two"), // id 5
+	)
+	if err := sess.Add(Entry{Compaction: &Compaction{Summary: "They talked.", FirstKept: 4, TokensBefore: 900}}); err != nil {
+		t.Fatal(err)
+	}
+	sess.AddUser("third")
+
+	check := func(s *Session) {
+		t.Helper()
+		var texts []string
+		for _, message := range s.Context() {
+			texts = append(texts, message.Text())
+		}
+		want := []string{SummaryPrefix + "They talked.", "second", "answer two", "third"}
+		if !reflect.DeepEqual(texts, want) {
+			t.Fatalf("context = %q", texts)
+		}
+		if got := s.Context()[0].Role; got != llm.RoleUser {
+			t.Fatalf("summary role = %q", got)
+		}
+		if len(s.Entries) != 7 {
+			t.Fatalf("log has %d entries, want all 7", len(s.Entries))
+		}
+	}
+	check(sess)
+	loaded, err := Load(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(loaded)
+
+	// A later compaction supersedes the earlier one.
+	loaded.Add(Entry{Compaction: &Compaction{Summary: "Shorter.", FirstKept: 7}})
+	if got := loaded.Context(); len(got) != 2 || got[0].Text() != SummaryPrefix+"Shorter." || got[1].Text() != "third" {
+		t.Fatalf("context after second compaction = %#v", got)
+	}
+}

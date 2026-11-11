@@ -17,6 +17,10 @@ const (
 	EventUsage EventType = "usage"
 	// EventSessionInfo reports changed session metadata, in Title.
 	EventSessionInfo EventType = "session_info"
+	// EventCompaction reports that older context was replaced by a summary,
+	// in Compaction. When compaction was attempted and failed, Compaction is
+	// nil and Text holds the reason.
+	EventCompaction EventType = "compaction"
 	// EventDone marks the end of the agent's turn.
 	EventDone EventType = "done"
 )
@@ -33,6 +37,13 @@ type Event struct {
 	// or zero if unknown.
 	ContextWindow int
 	Title         string
+	Compaction    *CompactionEvent
+}
+
+// CompactionEvent gives the estimated context size around a compaction.
+type CompactionEvent struct {
+	TokensBefore int
+	TokensAfter  int
 }
 
 // ToolEvent describes a tool call. Result and Failed are set once it is done.

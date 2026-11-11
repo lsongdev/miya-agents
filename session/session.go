@@ -26,6 +26,9 @@ const (
 	EntryMeta EntryType = "meta"
 	// EntryMessage is one complete user, assistant or tool message.
 	EntryMessage EntryType = "message"
+	// EntryCompaction replaces everything before a point in the log with a
+	// summary, as far as the model is concerned.
+	EntryCompaction EntryType = "compaction"
 )
 
 // Entry is one line of the log. Type selects which of the payload fields is
@@ -43,7 +46,19 @@ type Entry struct {
 	Usage *llm.Usage `json:"usage,omitempty"`
 	// Files are the files a tool handed to the user, recorded with its
 	// result message. The model does not see them.
-	Files []llm.Media `json:"files,omitempty"`
+	Files      []llm.Media `json:"files,omitempty"`
+	Compaction *Compaction `json:"compaction,omitempty"`
+}
+
+// Compaction records that the model's view of the log now starts with
+// Summary, followed by the messages from entry FirstKept onward. Earlier
+// entries stay in the log and are still replayed to clients.
+type Compaction struct {
+	Summary string `json:"summary"`
+	// FirstKept is the ID of the first entry the model still sees in full.
+	FirstKept int `json:"first_kept"`
+	// TokensBefore is the estimated context size that prompted this.
+	TokensBefore int `json:"tokens_before,omitempty"`
 }
 
 // Meta is session metadata. Empty fields leave the current value unchanged.
@@ -160,6 +175,8 @@ func (s *Session) Add(entry Entry) error {
 			entry.Type = EntryMessage
 		case entry.Meta != nil:
 			entry.Type = EntryMeta
+		case entry.Compaction != nil:
+			entry.Type = EntryCompaction
 		default:
 			return errors.New("session entry has no payload")
 		}
@@ -230,13 +247,39 @@ func (s *Session) SetTitle(title string) error {
 	return s.Add(Entry{Meta: &Meta{Title: title}})
 }
 
-// Context is the view of the log sent to the model: its messages, in order.
+// SummaryPrefix introduces a compaction summary where it stands in for the
+// messages it replaced.
+const SummaryPrefix = "Earlier parts of this conversation were replaced by the following summary to save context:\n\n"
+
+// Active returns what the model still sees of the log: the summary of the
+// latest compaction, if any, and the message entries that follow it.
+func (s *Session) Active() (summary string, entries []Entry) {
+	firstKept := 0
+	for _, entry := range s.Entries {
+		if c := entry.Compaction; c != nil {
+			summary, firstKept = c.Summary, c.FirstKept
+		}
+	}
+	for _, entry := range s.Entries {
+		if entry.Message != nil && entry.ID >= firstKept {
+			entries = append(entries, entry)
+		}
+	}
+	return summary, entries
+}
+
+// Context is the view of the log sent to the model: the latest compaction
+// summary as a user message, then the messages still active, in order.
 //
 // A turn can be cut short between a tool call and its result, by a crash or
 // a cancelled request. Providers reject a call with no result, so each one
 // is answered here with a placeholder. The log itself is left as it is.
 func (s *Session) Context() []llm.Message {
+	summary, entries := s.Active()
 	var messages []llm.Message
+	if summary != "" {
+		messages = append(messages, llm.UserText(SummaryPrefix+summary))
+	}
 	var pending []llm.ToolCall // calls of the last assistant message still unanswered
 	closePending := func() {
 		for _, call := range pending {
@@ -249,11 +292,8 @@ func (s *Session) Context() []llm.Message {
 		}
 		pending = nil
 	}
-	for _, entry := range s.Entries {
+	for _, entry := range entries {
 		message := entry.Message
-		if message == nil {
-			continue
-		}
 		if message.Role == llm.RoleTool {
 			for _, block := range message.Content {
 				if block.ToolResult != nil {

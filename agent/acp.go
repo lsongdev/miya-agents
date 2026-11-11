@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/lsongdev/miya-agents/acp"
@@ -29,6 +30,12 @@ func replaySession(sess *session.Session, contextWindow int, sender acp.SessionU
 			if err := sink(Event{Type: EventSessionInfo, Title: meta.Title}); err != nil {
 				return err
 			}
+		}
+		if c := entry.Compaction; c != nil {
+			if err := sink(Event{Type: EventCompaction, Compaction: &CompactionEvent{TokensBefore: c.TokensBefore}}); err != nil {
+				return err
+			}
+			usage = nil // counts from before no longer describe the context
 		}
 		message := entry.Message
 		if message == nil {
@@ -100,8 +107,25 @@ func acpUpdate(event Event) (acp.SessionUpdate, bool) {
 		}
 	case EventSessionInfo:
 		return sessionInfoUpdate(event.Title), event.Title != ""
+	case EventCompaction:
+		// ACP has no update for this; a thought is shown by clients that
+		// show the agent's working and hidden by those that do not.
+		return thoughtUpdate("\n[" + CompactionNote(event) + "]\n"), true
 	}
 	return acp.SessionUpdate{}, false
+}
+
+// CompactionNote describes a compaction event in one line.
+func CompactionNote(event Event) string {
+	c := event.Compaction
+	switch {
+	case c == nil:
+		return "Context compaction failed: " + event.Text
+	case c.TokensAfter > 0:
+		return fmt.Sprintf("Context compacted: about %d → %d tokens", c.TokensBefore, c.TokensAfter)
+	default:
+		return "Context compacted"
+	}
 }
 
 func userMessageUpdate(text string) acp.SessionUpdate {

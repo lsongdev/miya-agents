@@ -121,7 +121,7 @@ func TestPromptRunsToolRoundTripAndPersists(t *testing.T) {
 	for _, update := range sender.updates {
 		kinds += update.SessionUpdate + " "
 	}
-	if kinds != "session_info_update tool_call tool_call_update agent_message_chunk " {
+	if kinds != "available_commands_update session_info_update tool_call tool_call_update agent_message_chunk " {
 		t.Fatalf("live updates = %q", kinds)
 	}
 
@@ -134,7 +134,7 @@ func TestPromptRunsToolRoundTripAndPersists(t *testing.T) {
 	for _, update := range replay.updates {
 		kinds += update.SessionUpdate + " "
 	}
-	if kinds != "user_message_chunk session_info_update tool_call tool_call_update agent_message_chunk " {
+	if kinds != "user_message_chunk session_info_update tool_call tool_call_update agent_message_chunk available_commands_update " {
 		t.Fatalf("replayed updates = %q", kinds)
 	}
 	if got := replay.updates[0].Content.Text; got != "what is the secret?" {
@@ -142,5 +142,106 @@ func TestPromptRunsToolRoundTripAndPersists(t *testing.T) {
 	}
 	if got := replay.updates[3].ToolCallUpdate; string(got.ToolCallID) != "call_1" || !strings.Contains(got.Content[0].Content.Text, "the secret is 42") {
 		t.Fatalf("replayed tool result = %#v", got)
+	}
+}
+
+// /compact arrives as ordinary prompt text. The runtime summarizes instead of
+// answering, the command stays out of the log, and replay still shows the
+// whole conversation.
+func TestPromptHandlesCompactCommand(t *testing.T) {
+	oldConfigPath := config.ConfigPath
+	config.ConfigPath = t.TempDir()
+	t.Cleanup(func() { config.ConfigPath = oldConfigPath })
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "COMPACT.md"), []byte("Summarize as a haiku."), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var systems []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+		}
+		systems = append(systems, req.Messages[0].Content)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{"content":"They greeted each other at length."}}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	m := NewAgentManager(&config.Config{
+		Profiles: map[string]*config.ProfileConfig{
+			"default": {Provider: "openai", ModelName: "test", Workspace: workspace, Tools: []string{"read_file"}, ContextWindowTokens: 40},
+		},
+		Providers: map[string]*config.ProviderConfig{"openai": {APIBase: server.URL}},
+	})
+	sess, err := session.Create("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("hello there ", 10)
+	sess.AddMessage(llm.UserText(long), llm.AssistantText(long), llm.UserText(long), llm.AssistantText("Last answer."))
+
+	ctx := context.Background()
+	sender := &recordingSender{}
+	prompt := func(text string) string {
+		t.Helper()
+		sender.updates = nil
+		_, err := m.Prompt(ctx, &acp.PromptRequest{
+			SessionID: acp.SessionID(sess.ID),
+			Prompt:    []acp.ContentBlock{{Type: "text", Text: text}},
+		}, sender)
+		if err != nil {
+			t.Fatalf("Prompt(%q): %v", text, err)
+		}
+		return sender.updates[len(sender.updates)-1].Content.Text
+	}
+
+	reply := prompt("/compact focus on greetings")
+	if !strings.HasPrefix(reply, "Context compacted: about ") {
+		t.Fatalf("reply = %q", reply)
+	}
+	if len(systems) != 1 || !strings.HasPrefix(systems[0], "Summarize as a haiku.") || !strings.Contains(systems[0], "focus on greetings") {
+		t.Fatalf("summary prompts = %q", systems)
+	}
+
+	saved, err := session.Load(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A 40-token window keeps about 10 tokens verbatim: the last answer alone
+	// is under that, so the question before it is kept too.
+	context := saved.Context()
+	if len(context) != 3 || context[0].Text() != session.SummaryPrefix+"They greeted each other at length." ||
+		context[1].Text() != long || context[2].Text() != "Last answer." {
+		t.Fatalf("context = %#v", context)
+	}
+	for _, entry := range saved.Entries {
+		if entry.Message != nil && strings.Contains(entry.Message.Text(), "/compact") {
+			t.Fatal("the command itself was logged as a message")
+		}
+	}
+
+	// Replay still shows all four original messages, then the compaction.
+	replay := &recordingSender{}
+	if _, err := m.LoadSession(ctx, &acp.LoadSessionRequest{SessionID: acp.SessionID(sess.ID)}, replay); err != nil {
+		t.Fatal(err)
+	}
+	kinds := ""
+	for _, update := range replay.updates {
+		kinds += update.SessionUpdate + " "
+	}
+	if kinds != "user_message_chunk agent_message_chunk user_message_chunk agent_message_chunk agent_thought_chunk available_commands_update " {
+		t.Fatalf("replayed updates = %q", kinds)
+	}
+
+	if reply := prompt("/compact"); !strings.HasPrefix(reply, "Nothing to compact yet") {
+		t.Fatalf("second reply = %q", reply)
 	}
 }

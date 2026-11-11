@@ -3,6 +3,7 @@ package agent
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,19 +73,28 @@ func (m *Manager) UseAgent(name string) (*Agent, error) {
 		System:        systemPrompt(profile.GetWorkspace()),
 		MaxTokens:     profile.MaxTokens,
 		ContextWindow: m.contextWindow(name),
-		Tools:         agentTools,
+		Compaction: CompactOptions{
+			Threshold: profile.ContextWarnRatio,
+			Prompt:    readWorkspaceFile(profile.GetWorkspace(), "COMPACT.md"),
+		},
+		Tools: agentTools,
 	}, nil
 }
 
 // systemPrompt reads the agent's instructions from AGENTS.md in its workspace.
 func systemPrompt(workspace string) string {
-	const fallback = "You are a helpful assistant."
+	return cmp.Or(readWorkspaceFile(workspace, "AGENTS.md"), "You are a helpful assistant.")
+}
+
+// readWorkspaceFile returns the content of an optional file in the agent's
+// workspace, or "" if it is missing.
+func readWorkspaceFile(workspace, name string) string {
 	if workspace == "" {
-		return fallback
+		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(workspace, "AGENTS.md"))
+	data, err := os.ReadFile(filepath.Join(workspace, name))
 	if err != nil {
-		return fallback
+		return ""
 	}
 	return string(data)
 }
@@ -297,16 +307,32 @@ func (m *Manager) Prompt(ctx context.Context, req *acp.PromptRequest, sender acp
 		}
 	}
 	prompt := strings.Join(textParts, "\n")
-	if err := sess.AddUser(prompt); err != nil {
-		return nil, fmt.Errorf("save prompt: %w", err)
-	}
 
 	ag, err := m.UseAgent(agentName)
 	if err != nil {
 		return nil, fmt.Errorf("use agent: %w", err)
 	}
-
 	sink := acpSink(sender)
+	// Sent here rather than from NewSession, whose client does not know the
+	// session id until that call returns.
+	if err := advertiseCommands(sender); err != nil {
+		return nil, err
+	}
+
+	if instructions, ok := CompactCommand(prompt); ok {
+		reply, err := RunCompactCommand(ctx, ag, sess, instructions)
+		if err != nil {
+			return nil, err
+		}
+		if err := sender.Send(assistantMessageUpdate(reply)); err != nil {
+			return nil, err
+		}
+		return &acp.PromptResponse{StopReason: acp.StopEndTurn}, nil
+	}
+
+	if err := sess.AddUser(prompt); err != nil {
+		return nil, fmt.Errorf("save prompt: %w", err)
+	}
 	if sess.Title == "" {
 		if title := sess.DisplayTitle(); title != "" {
 			if err := sess.SetTitle(title); err != nil {
@@ -332,7 +358,52 @@ func (m *Manager) LoadSession(ctx context.Context, req *acp.LoadSessionRequest, 
 	if err := replaySession(sess, m.contextWindow(sess.AgentName), sender); err != nil {
 		return nil, fmt.Errorf("replay session: %w", err)
 	}
+	if err := advertiseCommands(sender); err != nil {
+		return nil, err
+	}
 	return &acp.LoadSessionResponse{}, nil
+}
+
+// commands are the slash commands the runtime handles itself. They arrive as
+// ordinary prompt text, so any client can use them by typing.
+var commands = []acp.AvailableCommand{{
+	Name:        "compact",
+	Description: "Summarize the earlier conversation to free up context",
+	Input:       &acp.AvailableCommandInput{Hint: "optional instructions for the summary"},
+}}
+
+func advertiseCommands(sender acp.SessionUpdateSender) error {
+	return sender.Send(acp.SessionUpdate{
+		SessionUpdate:     "available_commands_update",
+		AvailableCommands: &acp.AvailableCommandsUpdate{AvailableCommands: commands},
+	})
+}
+
+// CompactCommand reports whether prompt is the /compact command, and returns
+// the instructions that follow it.
+func CompactCommand(prompt string) (instructions string, ok bool) {
+	rest, found := strings.CutPrefix(strings.TrimSpace(prompt), "/compact")
+	if !found || (rest != "" && !strings.ContainsAny(rest[:1], " \t\n")) {
+		return "", false
+	}
+	return strings.TrimSpace(rest), true
+}
+
+// RunCompactCommand compacts sess on request and returns the reply to show.
+// The command is not added to the log; only the compaction it causes is.
+func RunCompactCommand(ctx context.Context, ag *Agent, sess *session.Session, instructions string) (string, error) {
+	var note string
+	err := ag.Compact(ctx, sess, instructions, func(event Event) error {
+		note = CompactionNote(event) + "."
+		return nil
+	})
+	if errors.Is(err, ErrNothingToCompact) {
+		return "Nothing to compact yet: the conversation is still short.", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("compact: %w", err)
+	}
+	return note, nil
 }
 
 // contextWindow returns the context size configured for a profile.

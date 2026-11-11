@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/lsongdev/miya-agents/llm"
@@ -26,7 +27,9 @@ type Agent struct {
 	MaxTokens int
 	// ContextWindow is the model's context size in tokens, or zero if unknown.
 	ContextWindow int
-	Tools         []Tool
+	// Compaction tunes how the context is summarized when it fills up.
+	Compaction CompactOptions
+	Tools      []Tool
 }
 
 // tool returns the named tool, or nil if the agent has none by that name.
@@ -54,8 +57,22 @@ func (a *Agent) Run(ctx context.Context, sess *session.Session, sink Sink) error
 	if a.Model == nil {
 		return fmt.Errorf("agent has no model")
 	}
+	recovered := false
 	for {
+		if a.needsCompaction(sess) {
+			if err := a.autoCompact(ctx, sess, sink); err != nil {
+				return err
+			}
+		}
 		response, usage, err := a.respond(ctx, sess, sink)
+		// The estimate can be wrong, or the window unknown. If the provider
+		// says the request was too long, compact and try once more.
+		if isContextOverflow(err) && !recovered {
+			recovered = true
+			if a.Compact(ctx, sess, "", sink) == nil {
+				continue
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -78,6 +95,19 @@ func (a *Agent) Run(ctx context.Context, sess *session.Session, sink Sink) error
 			}
 		}
 	}
+}
+
+// autoCompact compacts on the loop's own initiative. Failing to summarize is
+// reported but does not end the turn: the next model call may still fit.
+func (a *Agent) autoCompact(ctx context.Context, sess *session.Session, sink Sink) error {
+	err := a.Compact(ctx, sess, "", sink)
+	if err == nil || errors.Is(err, ErrNothingToCompact) {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return err
+	}
+	return sink(Event{Type: EventCompaction, Text: err.Error()})
 }
 
 // respond makes one model call and returns the complete assistant message

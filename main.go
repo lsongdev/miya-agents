@@ -188,6 +188,15 @@ func runCommand(args []string) {
 		if line == "exit" || line == "quit" {
 			return
 		}
+		if instructions, ok := agent.CompactCommand(line); ok {
+			reply, err := agent.RunCompactCommand(ctx, ag, sess, instructions)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+			} else {
+				fmt.Println(reply)
+			}
+			continue
+		}
 		if err := sess.AddUser(line); err != nil {
 			fmt.Printf("Error: %v\n", err)
 			continue
@@ -254,6 +263,10 @@ func (w *stdoutWriter) Handle(event agent.Event) error {
 			status = "failed"
 		}
 		fmt.Printf("[tool:%s] %s\n", status, event.Tool.Result)
+	case agent.EventCompaction:
+		w.finishThought()
+		w.flush()
+		fmt.Printf("\n%s[%s]%s\n", dim, agent.CompactionNote(event), reset)
 	case agent.EventDone:
 		w.finishThought()
 		w.flush()
@@ -287,10 +300,43 @@ func sessionsCommand() {
 	switch subcommand {
 	case "list":
 		sessionsListCommand()
+	case "compact":
+		sessionsCompactCommand(os.Args[3:])
 	default:
 		fmt.Printf("Unknown sessions subcommand: %s\n", subcommand)
 		fmt.Println("Run 'miya sessions list' to list sessions.")
 	}
+}
+
+// sessionsCompactCommand summarizes the earlier part of a session, using the
+// agent the session belongs to. Arguments after the id are instructions for
+// the summary.
+func sessionsCompactCommand(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Usage: miya sessions compact <id> [instructions]")
+		return
+	}
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Printf("Error loading config: %v\n", err)
+		return
+	}
+	sess, err := session.Load(args[0])
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	ag, err := agent.NewAgentManager(cfg).UseAgent(sess.AgentName)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	reply, err := agent.RunCompactCommand(context.Background(), ag, sess, strings.Join(args[1:], " "))
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	fmt.Println(reply)
 }
 
 func sessionsListCommand() {
@@ -442,6 +488,7 @@ func printUsage() {
 	fmt.Println("  miya -r 1f2e3d4c-...              # resume a specific session")
 	fmt.Println("  miya run --agent myagent")
 	fmt.Println("  miya sessions list")
+	fmt.Println("  miya sessions compact <id> [instructions]")
 	fmt.Println("  miya serve --addr :8080")
 	fmt.Println("  miya help")
 	fmt.Println()
