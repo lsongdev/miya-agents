@@ -108,9 +108,9 @@ for _, data := range resp.Data {
 
 ## Tools
 
-Implements OpenAI function calling. A `Tool` provides a `Def()` describing the
-function (`ToolDef`/`FunctionDef`, a JSON Schema in `Parameters`) and a `Run`
-method executed by the agent loop when the model requests it.
+Implements OpenAI function calling. A function is described to the model with
+`ToolDef`/`FunctionDef` (a JSON Schema in `Parameters`). Executable tools are
+not part of this package; the agent's `Tool` interface lives in `agent`.
 
 Model tool calls arrive as `ChatCompletionMessage.ToolCalls`. Feed results back
 with:

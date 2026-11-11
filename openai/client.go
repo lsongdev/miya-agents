@@ -146,24 +146,41 @@ type ChatCompletionChoice struct {
 }
 
 type ContentPart struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	ImageURL *struct {
-		URL    string `json:"url"`
-		Detail string `json:"detail,omitempty"`
-	} `json:"image_url,omitempty"`
+	Type     string    `json:"type"` // text, image_url
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+type ImageURL struct {
+	URL    string `json:"url"` // http(s) URL or data: URI
+	Detail string `json:"detail,omitempty"`
 }
 
 type ChatCompletionMessage struct {
-	Role             string `json:"role,omitempty"`              // system, user, assistant, tool
-	Content          string `json:"content,omitempty"`           // text content (string or array of parts)
-	ReasoningContent string `json:"reasoning_content,omitempty"` // deepseek-reasoner
+	Role    string `json:"role,omitempty"`    // system, user, assistant, tool
+	Content string `json:"content,omitempty"` // text content
+	// Parts, when set, is sent as the content array instead of Content. Use it
+	// for multimodal user messages. Received content arrays are flattened
+	// into Content.
+	Parts            []ContentPart `json:"-"`
+	ReasoningContent string        `json:"reasoning_content,omitempty"` // deepseek-reasoner
 
 	// tools calls request
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // for assistant messages
 	// tools results
 	ToolCallID string `json:"tool_call_id,omitempty"` // for tool result messages
 	Name       string `json:"name,omitempty"`         // tool name for tool results
+}
+
+func (m ChatCompletionMessage) MarshalJSON() ([]byte, error) {
+	type Alias ChatCompletionMessage
+	if len(m.Parts) == 0 {
+		return json.Marshal(Alias(m))
+	}
+	return json.Marshal(struct {
+		Content []ContentPart `json:"content"`
+		Alias
+	}{m.Parts, Alias(m)})
 }
 
 func (m *ChatCompletionMessage) UnmarshalJSON(data []byte) error {

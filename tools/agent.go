@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/llm"
 )
 
 type DelegateFunc func(context.Context, string, string) (string, error)
@@ -21,7 +21,7 @@ func NewDelegateTool(delegate DelegateFunc, agents map[string]string) *DelegateT
 	return &DelegateTool{Delegate: delegate, Agents: agents}
 }
 
-func (t *DelegateTool) Def() openai.ToolDef {
+func (t *DelegateTool) Def() llm.ToolDef {
 	names := make([]string, 0, len(t.Agents))
 	for name := range t.Agents {
 		names = append(names, name)
@@ -41,26 +41,23 @@ func (t *DelegateTool) Def() openai.ToolDef {
 		description = agents.String()
 	}
 
-	return openai.ToolDef{
-		Type: "function",
-		Function: openai.FunctionDef{
-			Name:        "delegate",
-			Description: description,
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"agent": map[string]any{
-						"type": "string",
-						"enum": names,
-						"description": "Agent profile to run the task.",
-					},
-					"task": map[string]any{
-						"type":        "string",
-						"description": "Complete, self-contained task for the delegated agent.",
-					},
+	return llm.ToolDef{
+		Name:        "delegate",
+		Description: description,
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"agent": map[string]any{
+					"type":        "string",
+					"enum":        names,
+					"description": "Agent profile to run the task.",
 				},
-				"required": []string{"agent", "task"},
+				"task": map[string]any{
+					"type":        "string",
+					"description": "Complete, self-contained task for the delegated agent.",
+				},
 			},
+			"required": []string{"agent", "task"},
 		},
 	}
 }

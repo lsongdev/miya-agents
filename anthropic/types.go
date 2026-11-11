@@ -136,12 +136,25 @@ type ContentBlock struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   string          `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	Signature string          `json:"signature,omitempty"` // thinking
+	Source    *Source         `json:"source,omitempty"`    // image
+}
+
+// Source locates the data of an image block.
+type Source struct {
+	Type      string `json:"type"` // base64, url
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
 }
 
 // Usage contains token usage from Anthropic.
 type Usage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+	// Cache tokens are counted separately from InputTokens.
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 // APIError represents an error returned by the Anthropic API.
@@ -176,5 +189,6 @@ type Delta struct {
 	Text        string `json:"text,omitempty"`
 	Thinking    string `json:"thinking,omitempty"`
 	PartialJSON string `json:"partial_json,omitempty"`
+	Signature   string `json:"signature,omitempty"`
 	StopReason  string `json:"stop_reason,omitempty"`
 }

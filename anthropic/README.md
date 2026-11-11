@@ -2,7 +2,7 @@
 
 This package provides a Go client for the Anthropic Messages API. It supports
 non-streaming and streaming requests, tool use, model listing, and bidirectional
-conversion with the OpenAI `chat.completions` format used by the agent loop.
+conversion with the OpenAI `chat.completions` format used by the proxy.
 
 ## Client Setup
 
@@ -109,8 +109,11 @@ returns the list of available model IDs.
 
 ## OpenAI Interop
 
-The package converts between the OpenAI `chat.completions` shape (used by the
-agent loop) and the native Anthropic format:
+The package converts between the OpenAI `chat.completions` shape and the
+native Anthropic format. The agent loop does not use this path; it talks to
+this client through the `llm` package's adapter.
+
+The conversions are:
 
 - `NewAnthropicRequestFromChatCompletionRequest` — OpenAI request to Anthropic
   request.
@@ -121,8 +124,7 @@ agent loop) and the native Anthropic format:
 - `NewChatCompletionResponseFromAnthropicResponse` — Anthropic response to
   OpenAI response.
 
-The client itself implements the OpenAI surface so it can be dropped into an
-agent loop unchanged:
+The client itself also implements the OpenAI surface:
 
 ```go
 resp, err := client.CreateChatCompletion(ctx, &openai.ChatCompletionRequest{
@@ -136,7 +138,7 @@ ch, err := client.CreateChatCompletionStream(ctx, req)
 Streaming is bridged both ways:
 
 - `AnthropicStreamToChatCompletionStream` converts Anthropic SSE events to the
-  `<-chan openai.ChatCompletionResponse` consumed by the agent loop. Pass an
+  `<-chan openai.ChatCompletionResponse` used by OpenAI-shaped callers. Pass an
   optional `onEvent` callback to observe raw Anthropic events.
 - `OpenAIStreamToAnthropicStream` consumes an OpenAI stream and writes
   Anthropic-format SSE to an `http.ResponseWriter`, returning the assembled

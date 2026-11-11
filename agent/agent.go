@@ -4,47 +4,42 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 
-	"github.com/lsongdev/miya-agents/config"
-	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/llm"
 	"github.com/lsongdev/miya-agents/session"
 	"github.com/lsongdev/miya-agents/tools"
 )
 
-// StreamFunc is the only model capability required by the agent loop.
-type StreamFunc func(context.Context, *openai.ChatCompletionRequest) (<-chan openai.ChatCompletionResponse, error)
+// Tool is something the model can call.
+type Tool = tools.Tool
 
+// Agent runs a model in a loop, executing the tools it calls until it
+// finishes its turn. It holds no per-conversation state; that lives in the
+// session passed to Run.
 type Agent struct {
-	Name   string
-	Config *config.ProfileConfig
-	Stream StreamFunc
-	tools  []openai.Tool
+	Name string
+	// Model streams responses; ModelName is the model it is asked for.
+	Model     llm.Model
+	ModelName string
+	// System is the system prompt sent with every request.
+	System string
+	// MaxTokens limits each response. Zero leaves the choice to the model adapter.
+	MaxTokens int
+	Tools     []Tool
 }
 
-func New(name string, cfg *config.ProfileConfig, stream StreamFunc) *Agent {
-	return &Agent{Name: name, Config: cfg, Stream: stream}
-}
-
-// Use adds tools to the agent and returns it for chaining.
-func (a *Agent) Use(tools ...openai.Tool) *Agent {
-	a.tools = append(a.tools, tools...)
-	return a
-}
-
-func (a *Agent) tool(name string) (openai.Tool, bool) {
-	for _, tool := range a.tools {
-		if tool.Def().Function.Name == name {
+func (a *Agent) tool(name string) (Tool, bool) {
+	for _, tool := range a.Tools {
+		if tool.Def().Name == name {
 			return tool, true
 		}
 	}
 	return nil, false
 }
 
-func (a *Agent) toolDefs() []openai.ToolDef {
-	defs := make([]openai.ToolDef, len(a.tools))
-	for i, tool := range a.tools {
+func (a *Agent) toolDefs() []llm.ToolDef {
+	defs := make([]llm.ToolDef, len(a.Tools))
+	for i, tool := range a.Tools {
 		defs[i] = tool.Def()
 	}
 	return defs
@@ -54,108 +49,108 @@ func (a *Agent) toolDefs() []openai.ToolDef {
 // the caller; the same loop can therefore run persistent user sessions or
 // ephemeral delegated tasks.
 func (a *Agent) Run(ctx context.Context, sess *session.Session, sink EventSink) error {
-	if a.Stream == nil {
-		return fmt.Errorf("agent has no model stream")
+	if a.Model == nil {
+		return fmt.Errorf("agent has no model")
 	}
 	for {
-		req := openai.ChatCompletionRequest{
-			Model:    a.Config.ModelName,
-			Messages: sess.Messages,
-			Tools:    a.toolDefs(),
-			Stream:   true,
-		}
-		resp, err := a.Stream(ctx, &req)
+		response, err := a.respond(ctx, sess, sink)
 		if err != nil {
-			return fmt.Errorf("create model stream: %w", err)
-		}
-		builder := openai.NewMessageBuilder()
-		for chunk := range resp {
-			if chunk.Error != nil {
-				return fmt.Errorf("model stream: %s", chunk.Error.Message)
-			}
-			m := chunk.GetMessage()
-			if m == nil {
-				continue
-			}
-			builder.Update(*m)
-			if m.ReasoningContent != "" {
-				if err := sink.ThoughtDelta(m.ReasoningContent); err != nil {
-					return err
-				}
-			}
-			if m.Content != "" {
-				if err := sink.AssistantDelta(m.Content); err != nil {
-					return err
-				}
-			}
-		}
-		if err := ctx.Err(); err != nil {
 			return err
 		}
-		respMessage := builder.Build()
-		if respMessage.IsEmpty() {
-			return fmt.Errorf("model stream closed without a response")
-		}
-		sess.AppendResponse(respMessage)
-		if !respMessage.HasToolCall() {
+		sess.Append(response)
+
+		calls := response.ToolCalls()
+		if len(calls) == 0 {
 			if err := sink.Usage(UsageEvent{}); err != nil {
 				return err
 			}
-			a.AppendContextMaintenanceNotice(sess)
-			if err := sink.Done(); err != nil {
-				return err
-			}
-			return nil
+			return sink.Done()
 		}
-
-		for _, tc := range respMessage.ToolCalls {
-			if tc.ID == "" {
-				return fmt.Errorf("tool call %q is missing an id", tc.Function.Name)
-			}
-			tool, ok := a.tool(tc.Function.Name)
-			if err := sink.ToolCallStart(ToolCallEvent{
-				ID:        tc.ID,
-				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments,
-				Status:    "in_progress",
-				Call:      tc,
-			}); err != nil {
+		for _, call := range calls {
+			result, err := a.call(ctx, call, sink)
+			if err != nil {
 				return err
 			}
-			var result string
-			status := "completed"
-			if ok {
-				result = tool.Run(ctx, tc.Function.Arguments)
-				if tc.Function.Name == "attach_file" {
-					attachmentResult, emitted, err := emitAttachedFileResult(sink, result)
-					if err != nil {
-						result = fmt.Sprintf("Error: %v", err)
-					} else if emitted {
-						result = attachmentResult
-					}
-				}
-			} else {
-				status = "failed"
-				result = fmt.Sprintf("Error: unknown tool '%s'", tc.Function.Name)
-			}
-			if err := sink.ToolCallDone(ToolCallEvent{
-				ID:        tc.ID,
-				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments,
-				Result:    result,
-				Status:    status,
-				Call:      tc,
-			}); err != nil {
-				return err
-			}
-			sess.Messages = append(sess.Messages, openai.ToolResultMessage(tc.ID, tc.Function.Name, result))
+			sess.Append(llm.ToolResultMessage(result))
 		}
 	}
 }
 
-// RunAgentLoop is kept for callers using the previous name.
-func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink EventSink) error {
-	return a.Run(ctx, sess, sink)
+// respond makes one model call and returns the complete assistant message,
+// forwarding text and thinking to sink as they arrive.
+func (a *Agent) respond(ctx context.Context, sess *session.Session, sink EventSink) (llm.Message, error) {
+	req := &llm.Request{
+		Model:     a.ModelName,
+		System:    a.System,
+		Messages:  sess.Messages,
+		Tools:     a.toolDefs(),
+		MaxTokens: a.MaxTokens,
+	}
+	var builder llm.Builder
+	received := false
+	for delta, err := range a.Model.Stream(ctx, req) {
+		if err != nil {
+			return llm.Message{}, fmt.Errorf("model stream: %w", err)
+		}
+		received = true
+		builder.Add(delta)
+		if delta.Thinking != "" {
+			if err := sink.ThoughtDelta(delta.Thinking); err != nil {
+				return llm.Message{}, err
+			}
+		}
+		if delta.Text != "" {
+			if err := sink.AssistantDelta(delta.Text); err != nil {
+				return llm.Message{}, err
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return llm.Message{}, err
+	}
+	if !received {
+		return llm.Message{}, fmt.Errorf("model stream closed without a response")
+	}
+	response := builder.Message()
+	for _, call := range response.ToolCalls() {
+		if call.ID == "" {
+			return llm.Message{}, fmt.Errorf("tool call %q is missing an id", call.Name)
+		}
+	}
+	return response, nil
+}
+
+// call runs one tool call and reports it to sink. A tool failure is returned
+// to the model as the result; only a sink failure is returned as an error.
+func (a *Agent) call(ctx context.Context, call llm.ToolCall, sink EventSink) (llm.ToolResult, error) {
+	event := ToolCallEvent{ID: call.ID, Name: call.Name, Arguments: call.Arguments, Status: "in_progress", Call: call}
+	if err := sink.ToolCallStart(event); err != nil {
+		return llm.ToolResult{}, err
+	}
+
+	result := llm.ToolResult{ID: call.ID, Name: call.Name}
+	event.Status = "completed"
+	if tool, ok := a.tool(call.Name); ok {
+		result.Content = tool.Run(ctx, call.Arguments)
+		if call.Name == "attach_file" {
+			attachmentResult, emitted, err := emitAttachedFileResult(sink, result.Content)
+			if err != nil {
+				result.Content = fmt.Sprintf("Error: %v", err)
+			} else if emitted {
+				result.Content = attachmentResult
+			}
+		}
+	} else {
+		event.Status = "failed"
+		result.Content = fmt.Sprintf("Error: unknown tool '%s'", call.Name)
+		result.IsError = true
+	}
+
+	event.Result = result.Content
+	if err := sink.ToolCallDone(event); err != nil {
+		return llm.ToolResult{}, err
+	}
+	return result, nil
 }
 
 func emitAttachedFileResult(sink EventSink, result string) (string, bool, error) {
@@ -182,33 +177,4 @@ func emitAttachedFileResult(sink EventSink, result string) (string, bool, error)
 		return fmt.Sprintf("Attached %s (%s, %d bytes) inline.", attachment.Name, attachment.MimeType, attachment.Size), true, nil
 	}
 	return fmt.Sprintf("Attached %s (%s, %d bytes) as %s.", attachment.Name, attachment.MimeType, attachment.Size, attachment.URI), true, nil
-}
-
-func (a *Agent) NewSession() *session.Session {
-	s := session.New(a.Name)
-	prompt := a.readSystemPrompt()
-	if prompt != "" {
-		s.Messages = append(s.Messages, openai.SystemMessage(prompt))
-	}
-	return s
-}
-
-func (a *Agent) NewSessionWithPrompt(prompt string) *session.Session {
-	s := session.New(a.Name)
-	if prompt != "" {
-		s.Messages = append(s.Messages, openai.SystemMessage(prompt))
-	}
-	return s
-}
-
-func (a *Agent) readSystemPrompt() string {
-	workspace := a.Config.GetWorkspace()
-	if workspace == "" {
-		return "You are a helpful assistant."
-	}
-	data, err := os.ReadFile(filepath.Join(workspace, "AGENTS.md"))
-	if err != nil {
-		return "You are a helpful assistant."
-	}
-	return string(data)
 }

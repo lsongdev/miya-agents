@@ -49,15 +49,15 @@ func TestUseAgentSelectsProfileTools(t *testing.T) {
 		t.Fatal("exec should not be configured")
 	}
 
-	params := delegate.Def().Function.Parameters
+	params := delegate.Def().Parameters
 	properties := params["properties"].(map[string]any)
 	agent := properties["agent"].(map[string]any)
 	names := agent["enum"].([]string)
 	if strings.Join(names, ",") != "default,researcher" {
 		t.Fatalf("delegate agents = %v", names)
 	}
-	if !strings.Contains(delegate.Def().Function.Description, "researcher: web research") {
-		t.Fatalf("delegate description = %q", delegate.Def().Function.Description)
+	if !strings.Contains(delegate.Def().Description, "researcher: web research") {
+		t.Fatalf("delegate description = %q", delegate.Def().Description)
 	}
 }
 

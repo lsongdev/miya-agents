@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/lsongdev/miya-agents/openai"
+import "github.com/lsongdev/miya-agents/llm"
 
 type ToolCallEvent struct {
 	ID        string
@@ -8,7 +8,7 @@ type ToolCallEvent struct {
 	Arguments string
 	Result    string
 	Status    string
-	Call      openai.ToolCall
+	Call      llm.ToolCall
 }
 
 type SessionInfoEvent struct {

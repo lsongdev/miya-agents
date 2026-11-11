@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/lsongdev/miya-agents/llm"
 	"github.com/lsongdev/miya-agents/mcp"
-	"github.com/lsongdev/miya-agents/openai"
 )
 
 // mcpServer represents a registered MCP server.
 type McpServer struct {
 	config *mcp.McpServerConfig
 	client *mcp.Client
-	Tools  []openai.Tool
+	Tools  []Tool
 }
 
 func NewMcpServer(config *mcp.McpServerConfig) (server *McpServer, err error) {
@@ -36,7 +36,7 @@ func NewMcpServer(config *mcp.McpServerConfig) (server *McpServer, err error) {
 		err = fmt.Errorf("failed to list tools: %w", err)
 		return
 	}
-	var tools []openai.Tool
+	var tools []Tool
 	for _, mcpTool := range mcpTools {
 		tool := NewMcpTool(client, &mcpTool)
 		tools = append(tools, tool)
@@ -51,10 +51,10 @@ func NewMcpServer(config *mcp.McpServerConfig) (server *McpServer, err error) {
 
 func (s *McpServer) Close() {
 	s.client.Close()
-	s.Tools = []openai.Tool{}
+	s.Tools = []Tool{}
 }
 
-// McpTool is a wrapper that implements the openai.Tool interface.
+// McpTool is a wrapper that implements the Tool interface.
 // It delegates to the McpManager for actual tool execution.
 type McpTool struct {
 	rpc  *mcp.Client
@@ -63,7 +63,7 @@ type McpTool struct {
 
 // NewMcpTool creates a tool wrapper for a specific tool.
 // Deprecated: Use McpManager directly for multi-server support.
-func NewMcpTool(rpc *mcp.Client, tool *mcp.Tool) openai.Tool {
+func NewMcpTool(rpc *mcp.Client, tool *mcp.Tool) Tool {
 	return &McpTool{
 		rpc:  rpc,
 		tool: tool,
@@ -71,11 +71,11 @@ func NewMcpTool(rpc *mcp.Client, tool *mcp.Tool) openai.Tool {
 }
 
 type namedMcpTool struct {
-	tool openai.Tool
-	def  openai.ToolDef
+	tool Tool
+	def  llm.ToolDef
 }
 
-func (m *namedMcpTool) Def() openai.ToolDef {
+func (m *namedMcpTool) Def() llm.ToolDef {
 	return m.def
 }
 
@@ -83,12 +83,23 @@ func (m *namedMcpTool) Run(ctx context.Context, args string) string {
 	return m.tool.Run(ctx, args)
 }
 
-// Def implements [openai.Tool].
-func (m *McpTool) Def() openai.ToolDef {
-	return m.tool.Def()
+// Def implements [Tool].
+func (m *McpTool) Def() llm.ToolDef {
+	var params map[string]any
+	if err := json.Unmarshal(m.tool.InputSchema, &params); err != nil {
+		params = map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
+	}
+	return llm.ToolDef{
+		Name:        m.tool.Name,
+		Description: m.tool.Description,
+		Parameters:  params,
+	}
 }
 
-// Run implements [openai.Tool].
+// Run implements [Tool].
 func (m *McpTool) Run(ctx context.Context, args string) string {
 	var arguments map[string]any
 	if err := json.Unmarshal([]byte(args), &arguments); err != nil {
@@ -149,8 +160,8 @@ func formatToolResultError(result *mcp.ToolResult) string {
 
 type McpManager struct {
 	Servers  map[string]McpServer
-	Tools    map[string]openai.Tool
-	ToolDefs []openai.ToolDef
+	Tools    map[string]Tool
+	ToolDefs []llm.ToolDef
 }
 
 func NewMcpManager(config map[string]*mcp.McpServerConfig) (manager *McpManager) {
@@ -165,14 +176,14 @@ func NewMcpManager(config map[string]*mcp.McpServerConfig) (manager *McpManager)
 	}
 	manager = &McpManager{
 		Servers:  mcpServers,
-		Tools:    make(map[string]openai.Tool),
-		ToolDefs: []openai.ToolDef{},
+		Tools:    make(map[string]Tool),
+		ToolDefs: []llm.ToolDef{},
 	}
 	for serverName, server := range manager.Servers {
 		for _, tool := range server.Tools {
 			d := tool.Def()
-			toolName := fmt.Sprintf("mcp_%s_%s", serverName, d.Function.Name)
-			d.Function.Name = toolName
+			toolName := fmt.Sprintf("mcp_%s_%s", serverName, d.Name)
+			d.Name = toolName
 			manager.Tools[toolName] = &namedMcpTool{tool: tool, def: d}
 			manager.ToolDefs = append(manager.ToolDefs, d)
 		}

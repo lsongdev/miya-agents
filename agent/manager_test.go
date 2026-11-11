@@ -10,8 +10,8 @@ import (
 
 	"github.com/lsongdev/miya-agents/acp"
 	"github.com/lsongdev/miya-agents/config"
+	"github.com/lsongdev/miya-agents/llm"
 	"github.com/lsongdev/miya-agents/mcp"
-	"github.com/lsongdev/miya-agents/openai"
 	"github.com/lsongdev/miya-agents/session"
 )
 
@@ -166,7 +166,7 @@ func TestUseAgentIncludesConfiguredMCPTools(t *testing.T) {
 		t.Fatalf("UseAgent: %v", err)
 	}
 	if _, ok := ag.tool("mcp_coffee_queryShopList"); !ok {
-		t.Fatalf("missing MCP tool; tools = %#v", ag.tools)
+		t.Fatalf("missing MCP tool; tools = %#v", ag.Tools)
 	}
 }
 
@@ -206,19 +206,15 @@ func TestUseAgentUsesAnthropicProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, err := ag.Stream(context.Background(), &openai.ChatCompletionRequest{
-		Model: "claude-test", Messages: []openai.ChatCompletionMessage{openai.UserMessage("hi")}, Stream: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	builder := openai.NewMessageBuilder()
-	for chunk := range stream {
-		if message := chunk.GetMessage(); message != nil {
-			builder.Update(*message)
+	var builder llm.Builder
+	request := &llm.Request{Model: ag.ModelName, Messages: []llm.Message{llm.UserText("hi")}}
+	for delta, err := range ag.Model.Stream(context.Background(), request) {
+		if err != nil {
+			t.Fatal(err)
 		}
+		builder.Add(delta)
 	}
-	if got := builder.Build().Content; got != "hello" {
+	if got := builder.Message().Text(); got != "hello" {
 		t.Fatalf("content = %q", got)
 	}
 }

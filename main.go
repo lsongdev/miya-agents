@@ -161,7 +161,7 @@ func runCommand(args []string) {
 	}
 
 	if sess == nil {
-		sess = ag.NewSession()
+		sess = session.New(agentName)
 	}
 
 	output := &stdoutWriter{}
@@ -202,7 +202,7 @@ func runCommand(args []string) {
 			fmt.Printf("Error: %v\n", err)
 			continue
 		}
-		if err := ag.RunAgentLoop(ctx, sess, sink); err != nil {
+		if err := ag.Run(ctx, sess, sink); err != nil {
 			fmt.Printf("Error: %v\n", err)
 		}
 	}

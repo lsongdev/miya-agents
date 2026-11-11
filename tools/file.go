@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/llm"
 )
 
 const readFileDefaultLimit = 100
@@ -19,32 +19,29 @@ type ReadFileTool struct {
 }
 
 // Def returns the tool definition.
-func (t *ReadFileTool) Def() openai.ToolDef {
-	return openai.ToolDef{
-		Type: "function",
-		Function: openai.FunctionDef{
-			Name: "read_file",
-			Description: "Read lines from a file. Returns up to 100 lines starting from offset (default 1). " +
-				"If the file has more lines than the limit, a notice is appended showing total line count " +
-				"so you can make follow-up calls with offset to read the rest.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path": map[string]any{
-						"type":        "string",
-						"description": "The path to the file to read.",
-					},
-					"offset": map[string]any{
-						"type":        "integer",
-						"description": "Starting line number (1-based). Defaults to 1.",
-					},
-					"limit": map[string]any{
-						"type":        "integer",
-						"description": "Maximum number of lines to return. Defaults to 100.",
-					},
+func (t *ReadFileTool) Def() llm.ToolDef {
+	return llm.ToolDef{
+		Name: "read_file",
+		Description: "Read lines from a file. Returns up to 100 lines starting from offset (default 1). " +
+			"If the file has more lines than the limit, a notice is appended showing total line count " +
+			"so you can make follow-up calls with offset to read the rest.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "The path to the file to read.",
 				},
-				"required": []string{"path"},
+				"offset": map[string]any{
+					"type":        "integer",
+					"description": "Starting line number (1-based). Defaults to 1.",
+				},
+				"limit": map[string]any{
+					"type":        "integer",
+					"description": "Maximum number of lines to return. Defaults to 100.",
+				},
 			},
+			"required": []string{"path"},
 		},
 	}
 }
@@ -127,26 +124,23 @@ type WriteFileTool struct {
 }
 
 // Def returns the tool definition.
-func (t *WriteFileTool) Def() openai.ToolDef {
-	return openai.ToolDef{
-		Type: "function",
-		Function: openai.FunctionDef{
-			Name:        "write_file",
-			Description: "Write content to a file at the given path. Relative paths are resolved from workspace root. Creates parent directories if needed.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path": map[string]any{
-						"type":        "string",
-						"description": "The path to the file to write.",
-					},
-					"content": map[string]any{
-						"type":        "string",
-						"description": "The content to write to the file.",
-					},
+func (t *WriteFileTool) Def() llm.ToolDef {
+	return llm.ToolDef{
+		Name:        "write_file",
+		Description: "Write content to a file at the given path. Relative paths are resolved from workspace root. Creates parent directories if needed.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "The path to the file to write.",
 				},
-				"required": []string{"path", "content"},
+				"content": map[string]any{
+					"type":        "string",
+					"description": "The content to write to the file.",
+				},
 			},
+			"required": []string{"path", "content"},
 		},
 	}
 }
@@ -186,26 +180,23 @@ type AppendFileTool struct {
 }
 
 // Def returns the tool definition.
-func (t *AppendFileTool) Def() openai.ToolDef {
-	return openai.ToolDef{
-		Type: "function",
-		Function: openai.FunctionDef{
-			Name:        "append_file",
-			Description: "Append content to a file at the given path. Relative paths are resolved from workspace root. Creates parent directories if needed.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path": map[string]any{
-						"type":        "string",
-						"description": "The path to the file to append.",
-					},
-					"content": map[string]any{
-						"type":        "string",
-						"description": "The content to append to the file.",
-					},
+func (t *AppendFileTool) Def() llm.ToolDef {
+	return llm.ToolDef{
+		Name:        "append_file",
+		Description: "Append content to a file at the given path. Relative paths are resolved from workspace root. Creates parent directories if needed.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "The path to the file to append.",
 				},
-				"required": []string{"path", "content"},
+				"content": map[string]any{
+					"type":        "string",
+					"description": "The content to append to the file.",
+				},
 			},
+			"required": []string{"path", "content"},
 		},
 	}
 }
@@ -251,30 +242,27 @@ type EditFileTool struct {
 }
 
 // Def returns the tool definition.
-func (t *EditFileTool) Def() openai.ToolDef {
-	return openai.ToolDef{
-		Type: "function",
-		Function: openai.FunctionDef{
-			Name:        "edit_file",
-			Description: "Edit a file by replacing specific text. Relative paths are resolved from workspace root. The old_text must match exactly (including whitespace).",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path": map[string]any{
-						"type":        "string",
-						"description": "The path to the file to edit.",
-					},
-					"old_text": map[string]any{
-						"type":        "string",
-						"description": "The exact text to find and replace.",
-					},
-					"new_text": map[string]any{
-						"type":        "string",
-						"description": "The text to replace with.",
-					},
+func (t *EditFileTool) Def() llm.ToolDef {
+	return llm.ToolDef{
+		Name:        "edit_file",
+		Description: "Edit a file by replacing specific text. Relative paths are resolved from workspace root. The old_text must match exactly (including whitespace).",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "The path to the file to edit.",
 				},
-				"required": []string{"path", "old_text", "new_text"},
+				"old_text": map[string]any{
+					"type":        "string",
+					"description": "The exact text to find and replace.",
+				},
+				"new_text": map[string]any{
+					"type":        "string",
+					"description": "The text to replace with.",
+				},
 			},
+			"required": []string{"path", "old_text", "new_text"},
 		},
 	}
 }

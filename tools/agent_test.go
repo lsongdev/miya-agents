@@ -20,7 +20,7 @@ func TestDelegateToolCallsFunction(t *testing.T) {
 		t.Fatalf("delegate = (%q, %q)", gotAgent, gotTask)
 	}
 	def := tool.Def()
-	if def.Function.Name != "delegate" || !strings.Contains(def.Function.Description, "researcher: research the web") {
-		t.Fatalf("definition = %#v", def.Function)
+	if def.Name != "delegate" || !strings.Contains(def.Description, "researcher: research the web") {
+		t.Fatalf("definition = %#v", def)
 	}
 }

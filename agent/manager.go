@@ -13,6 +13,7 @@ import (
 	"github.com/lsongdev/miya-agents/acp"
 	"github.com/lsongdev/miya-agents/anthropic"
 	"github.com/lsongdev/miya-agents/config"
+	"github.com/lsongdev/miya-agents/llm"
 	"github.com/lsongdev/miya-agents/openai"
 	"github.com/lsongdev/miya-agents/session"
 	"github.com/lsongdev/miya-agents/tools"
@@ -45,17 +46,16 @@ func (m *Manager) UseAgent(name string) (*Agent, error) {
 		return nil, fmt.Errorf("provider not found: %s", profile.Provider)
 	}
 
-	var stream StreamFunc
+	var model llm.Model
 	switch strings.ToLower(strings.TrimSpace(provider.Type)) {
 	case "", "openai":
 		client, err := openai.NewClient(&openai.Configuration{API: provider.APIBase, APIKey: provider.APIKey})
 		if err != nil {
 			return nil, err
 		}
-		stream = client.CreateChatCompletionStream
+		model = llm.OpenAI(client)
 	case "anthropic":
-		client := anthropic.NewClient(&anthropic.Configuration{API: provider.APIBase, APIKey: provider.APIKey})
-		stream = client.CreateChatCompletionStream
+		model = llm.Anthropic(anthropic.NewClient(&anthropic.Configuration{API: provider.APIBase, APIKey: provider.APIKey}))
 	default:
 		return nil, fmt.Errorf("unsupported provider type %q", provider.Type)
 	}
@@ -64,16 +64,36 @@ func (m *Manager) UseAgent(name string) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent %q tools: %w", name, err)
 	}
-	return New(name, profile, stream).Use(agentTools...), nil
+	return &Agent{
+		Name:      name,
+		Model:     model,
+		ModelName: profile.ModelName,
+		System:    systemPrompt(profile.GetWorkspace()),
+		MaxTokens: profile.MaxTokens,
+		Tools:     agentTools,
+	}, nil
 }
 
-func (m *Manager) toolsFor(profile *config.ProfileConfig) ([]openai.Tool, error) {
+// systemPrompt reads the agent's instructions from AGENTS.md in its workspace.
+func systemPrompt(workspace string) string {
+	const fallback = "You are a helpful assistant."
+	if workspace == "" {
+		return fallback
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, "AGENTS.md"))
+	if err != nil {
+		return fallback
+	}
+	return string(data)
+}
+
+func (m *Manager) toolsFor(profile *config.ProfileConfig) ([]Tool, error) {
 	workspace := profile.GetWorkspace()
 	if workspace != "" {
 		_ = os.MkdirAll(workspace, 0755)
 	}
 
-	available := []openai.Tool{
+	available := []Tool{
 		&tools.WebFetchTool{},
 		&tools.WebSearchTool{},
 		&tools.ReadFileTool{Workspace: workspace},
@@ -109,11 +129,11 @@ func (m *Manager) toolsFor(profile *config.ProfileConfig) ([]openai.Tool, error)
 		return available, nil
 	}
 
-	byName := make(map[string]openai.Tool, len(available))
+	byName := make(map[string]Tool, len(available))
 	for _, tool := range available {
-		byName[tool.Def().Function.Name] = tool
+		byName[tool.Def().Name] = tool
 	}
-	selected := make([]openai.Tool, 0, len(profile.Tools))
+	selected := make([]Tool, 0, len(profile.Tools))
 	for _, name := range profile.Tools {
 		tool, ok := byName[name]
 		if !ok {
@@ -194,7 +214,7 @@ func (m *Manager) Delegate(ctx context.Context, name, task string) (string, erro
 		return "", err
 	}
 
-	sess := ag.NewSession()
+	sess := session.New(ag.Name)
 	sess.AppendRequest(task)
 	writer := &captureWriter{}
 	ctx = context.WithValue(ctx, delegateDepthKey{}, depth+1)
@@ -203,8 +223,8 @@ func (m *Manager) Delegate(ctx context.Context, name, task string) (string, erro
 	}
 	for i := len(sess.Messages) - 1; i >= 0; i-- {
 		message := sess.Messages[i]
-		if message.Role == openai.RoleAssistant && !message.HasToolCall() && message.Content != "" {
-			return message.Content, nil
+		if text := message.Text(); message.Role == llm.RoleAssistant && len(message.ToolCalls()) == 0 && text != "" {
+			return text, nil
 		}
 	}
 	return writer.sb.String(), nil

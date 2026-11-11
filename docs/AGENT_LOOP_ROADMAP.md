@@ -1,151 +1,243 @@
 # Agent Loop Roadmap
 
-This note tracks the next miya-agents architecture changes needed for a richer ACP client experience.
+Status: target design; step 1 of [Order of Work](#order-of-work) is implemented
+
+Updated: 2026-11-11
+
+This note is the target architecture for the miya-agents runtime: package
+layering, the model-facing message types, the session format, the event
+stream, and context compaction. It replaces the earlier roadmap, whose
+skill-guided compaction and dual `messages`/`events` session file are
+superseded here (see [Superseded Decisions](#superseded-decisions)).
 
 ## Current Shape
 
-The current loop is intentionally simple:
+- `llm` holds the neutral message, request and stream types, with one adapter
+  per SDK. `agent.Agent` is built from plain fields and calls an `llm.Model`.
+- `agent.Agent.Run` drives the loop and reports through the 8-method
+  `EventSink` interface.
+- A session is one JSON file holding mutable `messages` (`[]llm.Message`) for
+  the model and append-only `events` (as `acp.SessionUpdate`) for UI replay.
+  Every save rewrites the whole file. Files written with OpenAI-shaped
+  messages are converted on load.
+- `agent.Manager` both assembles agents from config and implements
+  `acp.ServerHandler`.
+- There is no context compaction. The earlier context maintenance notice has
+  been removed; nothing replaces it until step 4.
 
-- `agent.Agent.RunAgentLoop` emits structured events through `EventSink`.
-- Tool calls are executed after the assistant message is fully assembled.
-- Tool execution is emitted as structured events for transports such as ACP and CLI.
-- Session files persist OpenAI chat messages for model context and ACP session events for UI replay.
-- ACP replay sends the persisted event log in order.
+## Problems
 
-This works for basic structured replay. The remaining gaps are richer event types, user-provided maintenance guidance, and better generated metadata quality.
+1. **The core depends on its transport.** `session` imports `acp`, and
+   `agent` implements the ACP server. The loop cannot be used or tested
+   without the protocol package.
+2. **OpenAI Chat was the implicit canonical model** and the persisted format.
+   It cannot carry content blocks, images, thinking signatures, or cache
+   hints. *Fixed by step 1*, except that `Manager.Prompt` still forwards only
+   the text blocks of a prompt.
+3. **A session has two sources of truth.** `messages` and `events` describe
+   the same conversation and must be kept in step by hand. Compaction has to
+   rewrite `messages`, which is why "who edits the file" had no good answer.
+4. **Compaction is delegated to the model.** A model editing the file that
+   backs its own running session races with the next save, can split a tool
+   call from its result, and depends on the model noticing a notice. The
+   notice is a mid-conversation system message, which Anthropic Messages does
+   not accept and which invalidates prompt caching.
+5. **`EventSink` grows by breaking implementers.** Each new event type changes
+   four implementations. `attach_file` is special-cased by tool name inside
+   the loop, and `UsageEvent` carries nothing.
 
-## Problem Areas
+## Target Layering
 
-### Structured Output
+```text
+openai/  anthropic/  sse/    wire SDKs; import nothing else from this module
+        ^
+llm/                         neutral Message / Request / stream types,
+                             plus one adapter per SDK
+        ^
+session/                     append-only log and its projections
+agent/                       loop, Tool, Event, compaction
+tools/  skills/  mcp/        capabilities
+        ^
+runtime/                     config -> Agent assembly, session store, delegation
+        ^
+acp/                         protocol library (types, client, server transport)
+acpserver/                   maps runtime calls and events onto ACP
+        ^
+cmd/miya/                    CLI (today: root main.go, readline.go, markdown.go)
 
-Clients such as opencode ACP distinguish:
+proxy/                       separate product; depends on the wire SDKs only
+```
 
-- assistant text
-- thought/reasoning chunks
-- tool call start/update/result
-- plan updates
-- usage/context updates
-- session info updates
+Rules:
 
-miya-agents now emits structured tool activity at runtime and records ACP-shaped session updates for exact replay. The next gap is broadening the event vocabulary to plan updates, richer usage information, permissions, and future channel-specific metadata.
+- Imports point downward only.
+- `agent` and `session` import neither `acp` nor `config`. An `Agent` is built
+  from plain options; `runtime` translates `config.ProfileConfig` into them.
+- `openai/` and `anthropic/` stay faithful to their wire protocols and know
+  nothing about agents. `anthropic/openai.go` still imports `openai` for the
+  proxy's conversions; it moves under `proxy/` in step 5.
+- `Tool` belongs to `agent`. Until `agent.Manager` moves to `runtime/`
+  (step 5), `agent` imports `tools`, so the interface is declared in `tools`
+  and aliased as `agent.Tool`.
+- `miya-channels` and `miya-desktop` reach the runtime only through ACP, over
+  stdio or `acp.DialInProcess`.
 
-### Session History
+## Model Types (`llm`)
 
-Session files now keep `[]openai.ChatCompletionMessage` and `[]session.Event` separately. `messages` remains the mutable model context. `events` is the append-only display protocol history used by ACP replay.
-
-### Context Compaction
-
-Long-running sessions need a way to reduce old context while keeping task continuity. miya-agents keeps runtime behavior minimal: when the estimated context window is nearly full, it appends a short system notice with the session id/path so the next model turn can compact the session JSON using user-provided guidance.
-
-### Session Titles
-
-Using the session ID as the visible title is poor UX. The current fallback is the first user message; richer title and summary updates can be handled by user-provided skills or prompts that edit session metadata.
-
-## Target Architecture
-
-Introduce a structured event sink between the agent loop and transports.
+A small neutral model, shaped as content blocks so both protocols map onto it
+without loss:
 
 ```go
-type EventSink interface {
-    UserMessage(text string) error
-    AssistantDelta(text string) error
-    ThoughtDelta(text string) error
-    ToolCallStart(call ToolCallEvent) error
-    ToolCallUpdate(update ToolCallUpdateEvent) error
-    ToolCallDone(update ToolCallUpdateEvent) error
-    PlanUpdate(plan PlanEvent) error
-    Usage(update UsageEvent) error
-    SessionInfo(update SessionInfoEvent) error
-    Done(stopReason string) error
+type Message struct {
+    Role    Role      // user, assistant, tool
+    Content []Block
+}
+
+type Block struct {
+    Type       BlockType // text, thinking, image, tool_call, tool_result
+    Text       string
+    Signature  string          // thinking signature, passed back verbatim
+    ToolCall   *ToolCall
+    ToolResult *ToolResult
+    Media      *Media
+}
+
+type Request struct {
+    Model     string
+    System    string
+    Messages  []Message
+    Tools     []ToolDef
+    MaxTokens int
+}
+
+// Model is the only capability the loop needs.
+type Model interface {
+    Stream(ctx context.Context, req *Request) (iter.Seq2[Delta, error])
 }
 ```
 
-ACP, CLI stdout, and future channels should each adapt this event stream to their output format:
+The system prompt is a request field, not a message. Each stream ends with a
+`Delta` carrying the stop reason and real token usage.
 
-- ACP sink maps events to `session/update`.
-- CLI sink renders concise terminal text.
-- Channel sinks can chunk/format content safely.
-- A recording sink persists display events in the session file.
+This is not the proxy's canonical codec. The proxy translates arbitrary client
+requests between wire protocols; `llm` only has to express what this agent
+sends and receives.
 
-The old string-only `Writer` path has been removed. New transports should implement `EventSink` directly.
+## Session Log
 
-## Session File Evolution
+A session is an append-only JSONL file, `~/.miya/sessions/<id>.jsonl`. Each
+line is one typed entry:
 
-Extend session files from model-only history to model history plus UI/event metadata.
+| Entry | Content |
+| --- | --- |
+| `meta` | agent name, title, cwd; later `meta` entries override earlier ones |
+| `user` | user message blocks |
+| `assistant` | complete assistant message: thinking, text, tool calls, usage |
+| `tool_result` | result blocks for one tool call, status, attachments |
+| `compaction` | summary, first kept entry id, token count before |
 
-```json
-{
-  "id": "...",
-  "agent_name": "default",
-  "title": "Implement ACP session replay",
-  "summary": "...",
-  "created_at": "...",
-  "updated_at": "...",
-  "messages": [],
-  "events": [],
-  "compactions": []
+Entries are never rewritten or deleted. Two projections are derived from the
+log:
+
+- **Model context**: the system prompt, then the latest `compaction` summary,
+  then every message entry from its first kept entry onward.
+- **Replay**: the full log, mapped to client updates by the transport
+  (`acpserver` for ACP). Compactions do not shorten what the user sees.
+
+Streaming deltas are not persisted; an entry is written when its message is
+complete. Listing sessions reads the `meta` entries, not whole histories.
+
+Existing `<id>.json` sessions are converted once on load.
+
+## Events
+
+One event type and one function replace the interface:
+
+```go
+type Event struct {
+    Type  EventType // text, thought, tool_start, tool_done, file,
+                    // usage, session_info, compaction, done
+    Text  string
+    Tool  *ToolCall
+    File  *File
+    Usage *Usage
+    // ...
 }
+
+type Sink func(Event) error
 ```
 
-Guidelines:
-
-- `messages` remains the source for model context.
-- `events` is the source for ACP/UI replay.
-- Replay must not reconstruct UI history from model messages.
-- `title` is short and user-facing.
-- `summary` is the latest durable conversation summary.
-- `compactions` records what was replaced and when.
+A sink handles the types it cares about and ignores the rest, so adding a
+type (plan, permission request) breaks nobody. Tools return a structured
+result (`Content` plus `Attachments`), and the loop turns attachments into
+`file` events without knowing any tool by name.
 
 ## Context Compaction
 
-Add compaction as a skill-guided session file operation.
+Compaction is a deterministic runtime step. The model is not asked to do it.
 
-Initial implementation:
+Before each model call the loop:
 
-1. Runtime estimates current message size against the configured context window.
-2. If the remaining window is below the warning threshold, append one short maintenance notice to `messages`.
-3. The notice includes the session id and `~/.miya/sessions/<id>.json`.
-4. User-provided maintenance guidance describes how to compact `messages`, update `summary/title/compactions`, and leave `events` unchanged.
+1. **Checks pressure.** Uses the real usage from the last response plus an
+   estimate for entries added since. Compacts when the total crosses a
+   threshold (default 80% of `contextWindowTokens`).
+2. **Picks a cut point.** Keeps roughly the most recent N tokens and cuts only
+   at a turn boundary, never between a tool call and its result.
+3. **Summarizes.** Sends the entries before the cut, including the previous
+   summary, in one plain model call with no tools. The summary model may be
+   configured separately from the main model.
+4. **Records it.** Appends a `compaction` entry. Nothing else in the log
+   changes; only the model-context projection does.
+5. **Tells the client.** Emits a `compaction` event.
 
-Current and potential entry points:
+If a provider still rejects a request as too long, the loop compacts and
+retries once.
 
-- Context pressure notice appended by runtime.
-- User-provided skill or prompt invoked by the model.
-- Future CLI command: `miya sessions compact <id>`
-- ACP method or command if the protocol surface supports it later
+Manual compaction calls the same function,
+`Compact(ctx, sess, instructions)`. The entry points are thin:
 
-Avoid silently rewriting active sessions without recording the compaction.
+- CLI: `/compact [instructions]` in the REPL, `miya sessions compact <id>`.
+- ACP: a slash command advertised through available commands.
+- Channels: `/compact`, routed by the gateway like its other commands.
 
-## Title And Summary
+User guidance is kept, but as input rather than as the mechanism: the summary
+prompt has a default and can be overridden by a file in the agent workspace.
 
-Short term:
+Later, if needed: prune large old tool outputs in the projection before
+resorting to a summary.
 
-- Return first user message as `SessionInfo.title` when no explicit title exists.
-- Store `title` and `updated_at` in session metadata.
+## Titles
 
-Medium term:
+The first user message remains the fallback title. A generated title is one
+more plain model call after the first turn; it appends a `meta` entry and
+emits `session_info`.
 
-- Generate a concise title after the first assistant turn.
-- Emit `session_info_update` so clients update the row immediately.
-- Save the generated title to the session file.
+## Superseded Decisions
 
-Current approach:
+- *"Replay must not reconstruct UI history from model messages."* This held
+  because OpenAI messages were too lossy to replay. Log entries are richer
+  than those messages, so one log now serves both projections.
+- *Skill-guided compaction through a context maintenance notice.* Replaced by
+  runtime compaction. `agent/context_notice.go` is removed.
+- *"The session file should remain editable JSON."* The log is still
+  line-oriented JSON a person can read, but the runtime owns writes to it.
 
-- Runtime does not provide dedicated metadata tools.
-- Skills document the exact JSON edits for `title`, `summary`, `messages`, and `compactions`.
-- Skills must preserve recent active context and never mutate `events`.
+## Order of Work
 
-## Suggested Order
+1. Add `llm` types and the two SDK adapters; move `Tool` out of `openai/`;
+   build `Agent` from plain options. **Done.**
+2. Replace `EventSink` with `Event` and `Sink`; report real usage.
+3. Move sessions to the append-only log with projections; convert old files.
+4. Implement compaction and `/compact` on the new session model.
+5. Split the ACP server out of `agent/manager.go` into `runtime/` and
+   `acpserver/`; move the CLI to `cmd/miya/`.
 
-1. Add session metadata fields: `title`, `updated_at`, `summary`. Done.
-2. Return title/updatedAt from `session/list`. Done.
-3. Persist replayable session events. Done.
-4. Add context pressure notice. Done.
-5. Add optional user-facing maintenance guidance.
-6. Add manual compaction command if the skill-based flow is not enough.
+Step 3 is the one that unlocks compaction.
 
 ## Notes
 
-- Thought/reasoning should be opt-in per provider and UI, because not every model exposes safe or useful reasoning text.
-- Tool call events should carry raw input/output for debugging, but clients should display concise summaries by default.
-- The session file should remain editable JSON, but code should provide safe helpers for metadata and compaction updates.
+- Thought output stays opt-in per provider and client.
+- Tool events carry raw input and output; clients show concise summaries by
+  default.
+- Tool calls within one assistant message may later run concurrently; the log
+  format does not assume an order between their results.

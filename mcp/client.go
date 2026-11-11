@@ -15,7 +15,6 @@ import (
 	"github.com/lsongdev/jsonrpc-go/jsonrpc"
 	"github.com/lsongdev/jsonrpc-go/jsonrpc/common"
 	"github.com/lsongdev/jsonrpc-go/jsonrpc/transports"
-	"github.com/lsongdev/miya-agents/openai"
 	"github.com/lsongdev/miya-agents/process"
 )
 
@@ -68,24 +67,6 @@ type Tool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"inputSchema"`
-}
-
-func (t *Tool) Def() openai.ToolDef {
-	var params map[string]any
-	if err := json.Unmarshal(t.InputSchema, &params); err != nil {
-		params = map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		}
-	}
-	return openai.ToolDef{
-		Type: "function",
-		Function: openai.FunctionDef{
-			Name:        t.Name,
-			Description: t.Description,
-			Parameters:  params,
-		},
-	}
 }
 
 // ToolResult represents the result of calling a tool.

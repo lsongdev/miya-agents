@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/llm"
 )
 
 const (
@@ -34,30 +34,27 @@ type AttachFileTool struct {
 	MaxInline int
 }
 
-func (t *AttachFileTool) Def() openai.ToolDef {
-	return openai.ToolDef{
-		Type: "function",
-		Function: openai.FunctionDef{
-			Name:        "attach_file",
-			Description: "Attach a file to the ACP conversation. Small files are sent inline as base64; larger files are sent as a file URL.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path": map[string]any{
-						"type":        "string",
-						"description": "Path to the file. Relative paths are resolved from the workspace root.",
-					},
-					"mimeType": map[string]any{
-						"type":        "string",
-						"description": "Optional MIME type override, e.g. image/png or application/pdf.",
-					},
-					"maxInlineBytes": map[string]any{
-						"type":        "integer",
-						"description": "Optional inline limit. Defaults to 262144 bytes.",
-					},
+func (t *AttachFileTool) Def() llm.ToolDef {
+	return llm.ToolDef{
+		Name:        "attach_file",
+		Description: "Attach a file to the ACP conversation. Small files are sent inline as base64; larger files are sent as a file URL.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the file. Relative paths are resolved from the workspace root.",
 				},
-				"required": []string{"path"},
+				"mimeType": map[string]any{
+					"type":        "string",
+					"description": "Optional MIME type override, e.g. image/png or application/pdf.",
+				},
+				"maxInlineBytes": map[string]any{
+					"type":        "integer",
+					"description": "Optional inline limit. Defaults to 262144 bytes.",
+				},
 			},
+			"required": []string{"path"},
 		},
 	}
 }

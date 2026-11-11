@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/llm"
 )
 
 const (
@@ -28,26 +28,23 @@ type WebSearchTool struct {
 }
 
 // Def returns the tool definition.
-func (t *WebSearchTool) Def() openai.ToolDef {
-	return openai.ToolDef{
-		Type: "function",
-		Function: openai.FunctionDef{
-			Name:        "web_search",
-			Description: "Search the web using DuckDuckGo and return results. Use for finding current information, documentation, etc.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"query": map[string]any{
-						"type":        "string",
-						"description": "The search query.",
-					},
-					"max_results": map[string]any{
-						"type":        "integer",
-						"description": "Maximum number of results to return. Defaults to 5.",
-					},
+func (t *WebSearchTool) Def() llm.ToolDef {
+	return llm.ToolDef{
+		Name:        "web_search",
+		Description: "Search the web using DuckDuckGo and return results. Use for finding current information, documentation, etc.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{
+					"type":        "string",
+					"description": "The search query.",
 				},
-				"required": []string{"query"},
+				"max_results": map[string]any{
+					"type":        "integer",
+					"description": "Maximum number of results to return. Defaults to 5.",
+				},
 			},
+			"required": []string{"query"},
 		},
 	}
 }
@@ -182,26 +179,23 @@ func normalizeSearchResultURL(rawURL string) string {
 type WebFetchTool struct{}
 
 // Def returns the tool definition.
-func (t *WebFetchTool) Def() openai.ToolDef {
-	return openai.ToolDef{
-		Type: "function",
-		Function: openai.FunctionDef{
-			Name:        "web_fetch",
-			Description: "Fetch the content of a web page. Returns the text content (HTML tags stripped for readability).",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"url": map[string]any{
-						"type":        "string",
-						"description": "The URL to fetch.",
-					},
-					"raw": map[string]any{
-						"type":        "boolean",
-						"description": "If true, return raw HTML instead of stripped text. Defaults to false.",
-					},
+func (t *WebFetchTool) Def() llm.ToolDef {
+	return llm.ToolDef{
+		Name:        "web_fetch",
+		Description: "Fetch the content of a web page. Returns the text content (HTML tags stripped for readability).",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url": map[string]any{
+					"type":        "string",
+					"description": "The URL to fetch.",
 				},
-				"required": []string{"url"},
+				"raw": map[string]any{
+					"type":        "boolean",
+					"description": "If true, return raw HTML instead of stripped text. Defaults to false.",
+				},
 			},
+			"required": []string{"url"},
 		},
 	}
 }

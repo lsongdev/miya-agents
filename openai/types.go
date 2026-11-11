@@ -1,9 +1,6 @@
 package openai
 
-import (
-	"context"
-	"time"
-)
+import "time"
 
 const (
 	RoleSystem    = "system"
@@ -19,12 +16,6 @@ const (
 	GPT4o             = "gpt-4o"
 	DeepSeekChat      = "deepseek-chat"
 )
-
-// Tool represents an executable tool.
-type Tool interface {
-	Def() ToolDef
-	Run(ctx context.Context, args string) string
-}
 
 // ToolCall represents a tool invocation by the model.
 type ToolCall struct {
@@ -64,6 +55,13 @@ type ChatCompletionRequest struct {
 	MaxTokens       int                     `json:"max_tokens,omitempty"`
 	User            string                  `json:"user,omitempty"`
 	Stream          bool                    `json:"stream,omitempty"`
+	StreamOptions   *StreamOptions          `json:"stream_options,omitempty"`
+}
+
+// StreamOptions configures a streaming response.
+type StreamOptions struct {
+	// IncludeUsage asks for a final chunk carrying token usage.
+	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
 type CompletionUsage struct {
@@ -122,11 +120,11 @@ type Error struct {
 }
 
 type EmbeddingRequest struct {
-	Input          any     `json:"input"`
-	Model          string  `json:"model,omitempty"`
-	EncodingFormat string  `json:"encoding_format,omitempty"`
-	Dimensions     *int    `json:"dimensions,omitempty"`
-	User           string  `json:"user,omitempty"`
+	Input          any    `json:"input"`
+	Model          string `json:"model,omitempty"`
+	EncodingFormat string `json:"encoding_format,omitempty"`
+	Dimensions     *int   `json:"dimensions,omitempty"`
+	User           string `json:"user,omitempty"`
 }
 
 type Embedding struct {
@@ -136,11 +134,11 @@ type Embedding struct {
 }
 
 type EmbeddingResponse struct {
-	Error  *Error       `json:"error,omitempty"`
-	Object string       `json:"object"`
-	Data   []Embedding  `json:"data"`
-	Model  string       `json:"model"`
-	Usage  *Usage       `json:"usage,omitempty"`
+	Error  *Error      `json:"error,omitempty"`
+	Object string      `json:"object"`
+	Data   []Embedding `json:"data"`
+	Model  string      `json:"model"`
+	Usage  *Usage      `json:"usage,omitempty"`
 }
 
 type Usage struct {

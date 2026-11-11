@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/llm"
 	"github.com/lsongdev/miya-agents/skills"
 )
 
@@ -34,19 +34,16 @@ func (t *SkillsTool) reloadSkillsFromDirectory() (err error) {
 }
 
 // Def returns the tool definition.
-func (t *SkillsTool) Def() openai.ToolDef {
-	return openai.ToolDef{
-		Type: "function",
-		Function: openai.FunctionDef{
-			Name:        "use_skills",
-			Description: "List all available skills or get the full prompt content of a specific skill. Call without 'name' to list all skills, or with 'name' to get a specific skill's content.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"name": map[string]any{
-						"type":        "string",
-						"description": "Optional. The name of the skill to use. If omitted or empty, lists all available skills.",
-					},
+func (t *SkillsTool) Def() llm.ToolDef {
+	return llm.ToolDef{
+		Name:        "use_skills",
+		Description: "List all available skills or get the full prompt content of a specific skill. Call without 'name' to list all skills, or with 'name' to get a specific skill's content.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Optional. The name of the skill to use. If omitted or empty, lists all available skills.",
 				},
 			},
 		},

@@ -51,12 +51,20 @@ func main() {
 		log.Printf("  - Model: %s\n", model.ID)
 	}
 
+	var toolDefs []openai.ToolDef
+	for _, def := range manager.ToolDefs {
+		toolDefs = append(toolDefs, openai.ToolDef{
+			Type:     "function",
+			Function: openai.FunctionDef{Name: def.Name, Description: def.Description, Parameters: def.Parameters},
+		})
+	}
+
 	request := &openai.ChatCompletionRequest{
 		Model: openai.DeepSeekChat,
 		Messages: []openai.ChatCompletionMessage{
 			openai.UserMessage("What time is it? Also list files in my projects directory."),
 		},
-		Tools: manager.ToolDefs,
+		Tools: toolDefs,
 		// Stream: true,
 	}
 	resp, err := client.CreateChatCompletion(context.Background(), request)

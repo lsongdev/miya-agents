@@ -12,7 +12,7 @@ import (
 
 	"github.com/lsongdev/miya-agents/acp"
 	"github.com/lsongdev/miya-agents/config"
-	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/llm"
 )
 
 type Event struct {
@@ -31,15 +31,15 @@ type Compaction struct {
 }
 
 type Session struct {
-	ID          string                         `json:"id"`
-	AgentName   string                         `json:"agent_name"`
-	Title       string                         `json:"title,omitempty"`
-	Summary     string                         `json:"summary,omitempty"`
-	CreatedAt   time.Time                      `json:"created_at"`
-	UpdatedAt   time.Time                      `json:"updated_at,omitempty"`
-	Messages    []openai.ChatCompletionMessage `json:"messages"`
-	Events      []Event                        `json:"events"`
-	Compactions []Compaction                   `json:"compactions"`
+	ID          string        `json:"id"`
+	AgentName   string        `json:"agent_name"`
+	Title       string        `json:"title,omitempty"`
+	Summary     string        `json:"summary,omitempty"`
+	CreatedAt   time.Time     `json:"created_at"`
+	UpdatedAt   time.Time     `json:"updated_at,omitempty"`
+	Messages    []llm.Message `json:"messages"`
+	Events      []Event       `json:"events"`
+	Compactions []Compaction  `json:"compactions"`
 }
 
 func sessionsDir() string {
@@ -68,7 +68,7 @@ func New(agentName string) *Session {
 		ID:        newUUID(),
 		AgentName: agentName,
 		CreatedAt: time.Now(),
-		Messages:  []openai.ChatCompletionMessage{},
+		Messages:  []llm.Message{},
 		Events:    []Event{},
 	}
 }
@@ -80,14 +80,23 @@ func Load(id string) (*Session, error) {
 		return nil, fmt.Errorf("failed to read session %s: %w", id, err)
 	}
 	var s Session
-	if err := json.Unmarshal(data, &s); err != nil {
+	// Messages are decoded separately so that files written before the llm
+	// message format are still readable.
+	file := struct {
+		*Session
+		Messages []json.RawMessage `json:"messages"`
+	}{Session: &s}
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil, fmt.Errorf("failed to parse session %s: %w", id, err)
+	}
+	if s.Messages, err = decodeMessages(file.Messages); err != nil {
 		return nil, fmt.Errorf("failed to parse session %s: %w", id, err)
 	}
 	if s.ID == "" {
 		s.ID = id
 	}
 	if s.Messages == nil {
-		s.Messages = []openai.ChatCompletionMessage{}
+		s.Messages = []llm.Message{}
 	}
 	if s.Events == nil {
 		s.Events = []Event{}
@@ -153,12 +162,14 @@ func Latest() (*Session, error) {
 	return sessions[0], nil
 }
 
+// AppendRequest appends a user text message.
 func (s *Session) AppendRequest(request string) {
-	s.Messages = append(s.Messages, openai.UserMessage(request))
+	s.Messages = append(s.Messages, llm.UserText(request))
 }
 
-func (s *Session) AppendResponse(response openai.ChatCompletionMessage) {
-	s.Messages = append(s.Messages, response)
+// Append appends messages to the model context.
+func (s *Session) Append(messages ...llm.Message) {
+	s.Messages = append(s.Messages, messages...)
 }
 
 func (s *Session) AppendEvent(update acp.SessionUpdate) {
@@ -186,7 +197,7 @@ func (s *Session) Save() error {
 		s.CreatedAt = time.Now()
 	}
 	if s.Messages == nil {
-		s.Messages = []openai.ChatCompletionMessage{}
+		s.Messages = []llm.Message{}
 	}
 	if s.Events == nil {
 		s.Events = []Event{}
@@ -212,8 +223,8 @@ func (s *Session) Save() error {
 // FirstUserMessage returns the first user message content, useful for previews.
 func (s *Session) FirstUserMessage() string {
 	for _, m := range s.Messages {
-		if m.Role == "user" {
-			return m.Content
+		if m.Role == llm.RoleUser {
+			return m.Text()
 		}
 	}
 	return ""

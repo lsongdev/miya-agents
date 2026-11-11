@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/llm"
 	"github.com/lsongdev/miya-agents/process"
 )
 
@@ -28,30 +28,27 @@ type ExecTool struct {
 }
 
 // Def returns the tool definition.
-func (t *ExecTool) Def() openai.ToolDef {
-	return openai.ToolDef{
-		Type: "function",
-		Function: openai.FunctionDef{
-			Name:        "exec",
-			Description: "Execute a shell command and return its output. Use for running programs, scripts, git commands, etc.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"command": map[string]any{
-						"type":        "string",
-						"description": "The shell command to execute.",
-					},
-					"workdir": map[string]any{
-						"type":        "string",
-						"description": "Optional working directory. Defaults to workspace.",
-					},
-					"timeout": map[string]any{
-						"type":        "integer",
-						"description": "Optional timeout in seconds. Defaults to 60.",
-					},
+func (t *ExecTool) Def() llm.ToolDef {
+	return llm.ToolDef{
+		Name:        "exec",
+		Description: "Execute a shell command and return its output. Use for running programs, scripts, git commands, etc.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"command": map[string]any{
+					"type":        "string",
+					"description": "The shell command to execute.",
 				},
-				"required": []string{"command"},
+				"workdir": map[string]any{
+					"type":        "string",
+					"description": "Optional working directory. Defaults to workspace.",
+				},
+				"timeout": map[string]any{
+					"type":        "integer",
+					"description": "Optional timeout in seconds. Defaults to 60.",
+				},
 			},
+			"required": []string{"command"},
 		},
 	}
 }
