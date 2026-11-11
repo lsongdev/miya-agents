@@ -26,6 +26,7 @@ func New(rt *runtime.Runtime) *Server {
 func (srv *Server) Initialize(ctx context.Context, req *acp.InitializeRequest) (*acp.InitializeResponse, error) {
 	caps := acp.DefaultAgentCapabilities()
 	caps.LoadSession = true
+	caps.PromptCapabilities.Image = true
 	caps.SessionCapabilities = acp.SessionCapabilities{
 		List:   &acp.SessionListCapabilities{},
 		Resume: &acp.SessionResumeCapabilities{},
@@ -88,13 +89,8 @@ func (srv *Server) Prompt(ctx context.Context, req *acp.PromptRequest, sender ac
 		sess.AgentName = agentName
 	}
 
-	var textParts []string
-	for _, block := range req.Prompt {
-		if block.Text != "" {
-			textParts = append(textParts, block.Text)
-		}
-	}
-	prompt := strings.Join(textParts, "\n")
+	message := promptMessage(req.Prompt)
+	prompt := message.Text()
 
 	ag, err := srv.rt.Agent(agentName)
 	if err != nil {
@@ -118,7 +114,7 @@ func (srv *Server) Prompt(ctx context.Context, req *acp.PromptRequest, sender ac
 		return &acp.PromptResponse{StopReason: acp.StopEndTurn}, nil
 	}
 
-	if err := sess.AddUser(prompt); err != nil {
+	if err := sess.AddMessage(message); err != nil {
 		return nil, fmt.Errorf("save prompt: %w", err)
 	}
 	if sess.Title == "" {

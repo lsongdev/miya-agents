@@ -54,6 +54,8 @@ func replaySession(sess *session.Session, contextWindow int, sender acp.SessionU
 			switch {
 			case block.Type == llm.BlockText && message.Role == llm.RoleUser:
 				err = sender.Send(userMessageUpdate(block.Text))
+			case block.Type == llm.BlockImage && block.Media != nil:
+				err = sender.Send(userImageUpdate(*block.Media))
 			case block.Type == llm.BlockText:
 				err = sink(agent.Event{Type: agent.EventText, Text: block.Text})
 			case block.Type == llm.BlockThinking:
@@ -120,6 +122,14 @@ func userMessageUpdate(text string) acp.SessionUpdate {
 		SessionUpdate: "user_message_chunk",
 		Content:       acp.ContentBlock{Type: "text", Text: text},
 	}
+}
+
+func userImageUpdate(media llm.Media) acp.SessionUpdate {
+	content := acp.ContentBlock{Type: "image", Data: media.Data, MimeType: media.MimeType, Name: media.Name}
+	if media.URL != "" {
+		content.URI = &media.URL
+	}
+	return acp.SessionUpdate{SessionUpdate: "user_message_chunk", Content: content}
 }
 
 func assistantMessageUpdate(text string) acp.SessionUpdate {

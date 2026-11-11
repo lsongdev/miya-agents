@@ -34,8 +34,8 @@ superseded here (see [Superseded Decisions](#superseded-decisions)).
    the protocol package. *Fixed by steps 3 and 5.*
 2. **OpenAI Chat was the implicit canonical model** and the persisted format.
    It cannot carry content blocks, images, thinking signatures, or cache
-   hints. *Fixed by step 1*, except that `Manager.Prompt` still forwards only
-   the text blocks of a prompt.
+   hints. *Fixed by step 1.* Prompt images now reach the model; other
+   attachments are described to it in text.
 3. **A session had two sources of truth.** `messages` and `events` described
    the same conversation and had to be kept in step by hand. Compaction had
    to rewrite `messages`, which is why "who edits the file" had no good
@@ -265,8 +265,6 @@ emits `session_info`.
 - `anthropic/openai.go` still imports `openai`, for the conversions the proxy
   uses. It is the one exception to "wire SDKs import nothing else" and
   belongs under `proxy/`.
-- `acpserver` forwards only the text blocks of a prompt. `llm` and both
-  adapters already carry images.
 - Embedders construct the server as
   `acpserver.New(runtime.New(cfg))`, replacing `agent.NewAgentManager(cfg)`.
   `miya-channels` and `miya-desktop` need that one-line change when they
