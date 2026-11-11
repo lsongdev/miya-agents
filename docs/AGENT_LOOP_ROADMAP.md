@@ -262,9 +262,6 @@ emits `session_info`.
 
 ## Remaining
 
-- `anthropic/openai.go` still imports `openai`, for the conversions the proxy
-  uses. It is the one exception to "wire SDKs import nothing else" and
-  belongs under `proxy/`.
 - Embedders construct the server as
   `acpserver.New(runtime.New(cfg))`, replacing `agent.NewAgentManager(cfg)`.
   `miya-channels` and `miya-desktop` need that one-line change when they

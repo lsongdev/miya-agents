@@ -90,7 +90,7 @@ func observeNativeResponse(protocol providers.Protocol, stream bool, body []byte
 			if err := json.Unmarshal(body, &response); err != nil {
 				return nil, err
 			}
-			return anthropic.NewChatCompletionResponseFromAnthropicResponse(&response), nil
+			return anthropicResponseToChat(&response), nil
 		}
 	}
 	return observeNativeStream(protocol, body)

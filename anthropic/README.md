@@ -1,8 +1,9 @@
 # Anthropic Package
 
 This package provides a Go client for the Anthropic Messages API. It supports
-non-streaming and streaming requests, tool use, model listing, and bidirectional
-conversion with the OpenAI `chat.completions` format used by the proxy.
+non-streaming and streaming requests, tool use, and model listing. It depends
+on nothing else in this module; the agent loop reaches it through the `llm`
+package's adapter.
 
 ## Client Setup
 
@@ -106,46 +107,6 @@ models, err := client.Models(ctx)
 ```
 
 returns the list of available model IDs.
-
-## OpenAI Interop
-
-The package converts between the OpenAI `chat.completions` shape and the
-native Anthropic format. The agent loop does not use this path; it talks to
-this client through the `llm` package's adapter.
-
-The conversions are:
-
-- `NewAnthropicRequestFromChatCompletionRequest` — OpenAI request to Anthropic
-  request.
-- `NewAnthropicResponseFromChatCompletionResponse` — OpenAI response to
-  Anthropic response.
-- `NewChatCompletionRequestFromAnthropicRequest` — Anthropic request to OpenAI
-  request.
-- `NewChatCompletionResponseFromAnthropicResponse` — Anthropic response to
-  OpenAI response.
-
-The client itself also implements the OpenAI surface:
-
-```go
-resp, err := client.CreateChatCompletion(ctx, &openai.ChatCompletionRequest{
-    Model:    "claude-3-5-sonnet-latest",
-    Messages: []openai.ChatCompletionMessage{openai.UserMessage("hi")},
-})
-
-ch, err := client.CreateChatCompletionStream(ctx, req)
-```
-
-Streaming is bridged both ways:
-
-- `AnthropicStreamToChatCompletionStream` converts Anthropic SSE events to the
-  `<-chan openai.ChatCompletionResponse` used by OpenAI-shaped callers. Pass an
-  optional `onEvent` callback to observe raw Anthropic events.
-- `OpenAIStreamToAnthropicStream` consumes an OpenAI stream and writes
-  Anthropic-format SSE to an `http.ResponseWriter`, returning the assembled
-  final response.
-
-Stop and finish reasons are mapped with `MapStopReason` (Anthropic to OpenAI)
-and `MapStopReasonReverse` (OpenAI to Anthropic).
 
 ## Server-Side SSE
 
