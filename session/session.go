@@ -106,9 +106,6 @@ func Create(agentName string) (*Session, error) {
 // Load reads the session with the given id from the sessions directory.
 func Load(id string) (*Session, error) {
 	path := sessionPath(id)
-	if err := migrateLegacy(id); err != nil {
-		return nil, fmt.Errorf("convert session %s: %w", id, err)
-	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read session %s: %w", id, err)

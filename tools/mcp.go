@@ -11,77 +11,46 @@ import (
 	"github.com/lsongdev/miya-agents/mcp"
 )
 
-// mcpServer represents a registered MCP server.
+// McpServer is a connected MCP server and the tools it offers.
 type McpServer struct {
 	config *mcp.McpServerConfig
 	client *mcp.Client
-	Tools  []agent.Tool
+	// Tools are named as the server names them.
+	Tools []*McpTool
 }
 
-func NewMcpServer(config *mcp.McpServerConfig) (server *McpServer, err error) {
+func NewMcpServer(config *mcp.McpServerConfig) (*McpServer, error) {
 	client, err := mcp.NewConfiguredClient(config)
 	if err != nil {
-		err = fmt.Errorf("failed to create client: %w", err)
-		return
+		return nil, fmt.Errorf("failed to create client: %w", err)
 	}
-	// Initialize the MCP client
-	if _, err = client.Initialize("openai-go", "1.0.0"); err != nil {
+	if _, err = client.Initialize("miya", "1.0.0"); err != nil {
 		client.Close()
-		err = fmt.Errorf("failed to initialize: %w", err)
-		return
+		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
-	// List available tools
 	mcpTools, err := client.ListTools()
 	if err != nil {
 		client.Close()
-		err = fmt.Errorf("failed to list tools: %w", err)
-		return
+		return nil, fmt.Errorf("failed to list tools: %w", err)
 	}
-	var tools []agent.Tool
-	for _, mcpTool := range mcpTools {
-		tool := NewMcpTool(client, &mcpTool)
-		tools = append(tools, tool)
+	server := &McpServer{config: config, client: client}
+	for _, tool := range mcpTools {
+		server.Tools = append(server.Tools, &McpTool{rpc: client, tool: tool, name: tool.Name})
 	}
-	server = &McpServer{
-		config: config,
-		client: client,
-		Tools:  tools,
-	}
-	return
+	return server, nil
 }
 
 func (s *McpServer) Close() {
 	s.client.Close()
-	s.Tools = []agent.Tool{}
+	s.Tools = nil
 }
 
-// McpTool is a wrapper that implements the agent.Tool interface.
-// It delegates to the McpManager for actual tool execution.
+// McpTool is one tool of an MCP server, as an agent.Tool. The model knows it
+// by name, which may differ from the name the server uses.
 type McpTool struct {
 	rpc  *mcp.Client
-	tool *mcp.Tool
-}
-
-// NewMcpTool creates a tool wrapper for a specific tool.
-// Deprecated: Use McpManager directly for multi-server support.
-func NewMcpTool(rpc *mcp.Client, tool *mcp.Tool) agent.Tool {
-	return &McpTool{
-		rpc:  rpc,
-		tool: tool,
-	}
-}
-
-type namedMcpTool struct {
-	tool agent.Tool
-	def  llm.ToolDef
-}
-
-func (m *namedMcpTool) Def() llm.ToolDef {
-	return m.def
-}
-
-func (m *namedMcpTool) Run(ctx context.Context, args string) string {
-	return m.tool.Run(ctx, args)
+	tool mcp.Tool
+	name string
 }
 
 // Def implements [agent.Tool].
@@ -94,7 +63,7 @@ func (m *McpTool) Def() llm.ToolDef {
 		}
 	}
 	return llm.ToolDef{
-		Name:        m.tool.Name,
+		Name:        m.name,
 		Description: m.tool.Description,
 		Parameters:  params,
 	}
@@ -182,11 +151,12 @@ func NewMcpManager(config map[string]*mcp.McpServerConfig) (manager *McpManager)
 	}
 	for serverName, server := range manager.Servers {
 		for _, tool := range server.Tools {
-			d := tool.Def()
-			toolName := fmt.Sprintf("mcp_%s_%s", serverName, d.Name)
-			d.Name = toolName
-			manager.Tools[toolName] = &namedMcpTool{tool: tool, def: d}
-			manager.ToolDefs = append(manager.ToolDefs, d)
+			// Prefix the server name so tools from different servers
+			// cannot collide.
+			named := *tool
+			named.name = fmt.Sprintf("mcp_%s_%s", serverName, tool.tool.Name)
+			manager.Tools[named.name] = &named
+			manager.ToolDefs = append(manager.ToolDefs, named.Def())
 		}
 	}
 	return

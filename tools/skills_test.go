@@ -11,7 +11,7 @@ func TestSkillsToolAllowsMissingWorkspace(t *testing.T) {
 
 	got := tool.Run(context.Background(), `{}`)
 
-	if !strings.Contains(got, "miya-config") {
+	if got != "No skills registered." {
 		t.Fatalf("Run = %q", got)
 	}
 }

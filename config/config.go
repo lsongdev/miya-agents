@@ -91,32 +91,6 @@ func AgentEndpoints(cfg *Config) ([]ACPAgentConfig, error) {
 	return endpoints, nil
 }
 
-func (c *Config) UnmarshalJSON(data []byte) error {
-	var probe struct {
-		Agents json.RawMessage `json:"agents"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return err
-	}
-	if len(probe.Agents) > 0 {
-		var v any
-		if err := json.Unmarshal(probe.Agents, &v); err != nil {
-			return err
-		}
-		if _, ok := v.(map[string]any); ok {
-			return fmt.Errorf("config field agents must be an array of ACP endpoints; move old agents object to profiles")
-		}
-	}
-
-	type alias Config
-	var decoded alias
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	*c = Config(decoded)
-	return nil
-}
-
 // ProviderConfig contains API credentials for a providers.
 type ProviderConfig struct {
 	APIKey   string            `json:"apiKey" yaml:"apiKey"`
@@ -136,7 +110,7 @@ type ProfileConfig struct {
 	MaxTokens           int      `json:"maxTokens,omitempty" yaml:"maxTokens,omitempty"`                     // defaults to 8192
 	Temperature         float64  `json:"temperature,omitempty" yaml:"temperature,omitempty"`                 // defaults to 0.95
 	ContextWindowTokens int      `json:"contextWindowTokens,omitempty" yaml:"contextWindowTokens,omitempty"` // defaults to 128000
-	ContextWarnRatio    float64  `json:"contextWarnRatio,omitempty" yaml:"contextWarnRatio,omitempty"`       // fraction of the context window at which the session is compacted; defaults to 0.8
+	CompactThreshold    float64  `json:"compactThreshold,omitempty" yaml:"compactThreshold,omitempty"`       // fraction of the context window at which the session is compacted; defaults to 0.8
 }
 
 func (ac *ProfileConfig) GetWorkspace() string {

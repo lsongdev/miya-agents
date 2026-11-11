@@ -12,12 +12,7 @@ import (
 	"github.com/lsongdev/miya-agents/llm"
 )
 
-const (
-	logExt    = ".jsonl"
-	legacyExt = ".json"
-	// backupExt is appended to a legacy file once it has been converted.
-	backupExt = ".bak"
-)
+const logExt = ".jsonl"
 
 func sessionsDir() string {
 	return filepath.Join(config.ConfigPath, "sessions")
@@ -25,10 +20,6 @@ func sessionsDir() string {
 
 func sessionPath(id string) string {
 	return filepath.Join(sessionsDir(), id+logExt)
-}
-
-func legacyPath(id string) string {
-	return filepath.Join(sessionsDir(), id+legacyExt)
 }
 
 // Info is a session's metadata, without its history.
@@ -54,21 +45,12 @@ func List() ([]Info, error) {
 		}
 		return nil, err
 	}
-	seen := make(map[string]bool)
 	var infos []Info
 	for _, e := range entries {
-		ext := filepath.Ext(e.Name())
-		if e.IsDir() || (ext != logExt && ext != legacyExt) {
+		if e.IsDir() || filepath.Ext(e.Name()) != logExt {
 			continue
 		}
-		id := strings.TrimSuffix(e.Name(), ext)
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
-		if migrateLegacy(id) != nil {
-			continue
-		}
+		id := strings.TrimSuffix(e.Name(), logExt)
 		if info, err := readInfo(id); err == nil {
 			infos = append(infos, info)
 		}
@@ -88,13 +70,11 @@ func Latest() (*Session, error) {
 	return Load(infos[0].ID)
 }
 
-// Delete removes a session and any backup of its legacy file. Deleting a
-// session that does not exist is not an error.
+// Delete removes a session. Deleting a session that does not exist is not an
+// error.
 func Delete(id string) error {
-	for _, path := range []string{sessionPath(id), legacyPath(id), legacyPath(id) + backupExt} {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
+	if err := os.Remove(sessionPath(id)); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }

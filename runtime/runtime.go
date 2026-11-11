@@ -71,7 +71,7 @@ func (r *Runtime) Agent(name string) (*agent.Agent, error) {
 		MaxTokens:     profile.MaxTokens,
 		ContextWindow: r.ContextWindow(name),
 		Compaction: agent.CompactOptions{
-			Threshold: profile.ContextWarnRatio,
+			Threshold: profile.CompactThreshold,
 			Prompt:    readWorkspaceFile(profile.GetWorkspace(), "COMPACT.md"),
 		},
 		Tools: agentTools,

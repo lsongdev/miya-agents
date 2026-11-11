@@ -154,10 +154,7 @@ dropped on load.
 Listing sessions scans each log for metadata without decoding message
 bodies.
 
-An existing `<id>.json` session is converted the first time it is listed or
-loaded, and the original is kept as `<id>.json.bak`. Its recorded ACP event
-list is not carried over, so files attached in old sessions no longer appear
-in replay.
+Sessions in the earlier single-JSON format (`<id>.json`) are not read.
 
 ## Events
 
@@ -191,7 +188,7 @@ Before each model call the loop:
 
 1. **Checks pressure.** Uses the real usage from the last response plus an
    estimate (4 characters per token) for entries added since. Compacts when
-   the total crosses a threshold: `contextWarnRatio` of
+   the total crosses a threshold: `compactThreshold` of
    `contextWindowTokens`, 80% by default.
 2. **Picks a cut point.** Keeps roughly the most recent N tokens (a quarter
    of the window, at most 20000) and starts the kept part at a user or
