@@ -1,4 +1,4 @@
-package agent
+package runtime
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 )
 
 func TestUseAgentSelectsProfileTools(t *testing.T) {
-	m := NewAgentManager(&config.Config{
+	m := New(&config.Config{
 		Profiles: map[string]*config.ProfileConfig{
 			"default": {
 				Provider:    "openai",
@@ -34,18 +34,18 @@ func TestUseAgentSelectsProfileTools(t *testing.T) {
 		},
 	})
 
-	ag, err := m.UseAgent("default")
+	ag, err := m.Agent("default")
 	if err != nil {
 		t.Fatalf("UseAgent: %v", err)
 	}
-	if ag.tool("web_search") == nil {
+	if findTool(ag, "web_search") == nil {
 		t.Fatal("web_search not configured")
 	}
-	delegate := ag.tool("delegate")
+	delegate := findTool(ag, "delegate")
 	if delegate == nil {
 		t.Fatal("delegate not configured")
 	}
-	if ag.tool("exec") != nil {
+	if findTool(ag, "exec") != nil {
 		t.Fatal("exec should not be configured")
 	}
 
@@ -62,7 +62,7 @@ func TestUseAgentSelectsProfileTools(t *testing.T) {
 }
 
 func TestUseAgentRejectsUnknownTool(t *testing.T) {
-	m := NewAgentManager(&config.Config{
+	m := New(&config.Config{
 		Profiles: map[string]*config.ProfileConfig{
 			"default": {Provider: "openai", ModelName: "test", Tools: []string{"missing"}},
 		},
@@ -71,7 +71,7 @@ func TestUseAgentRejectsUnknownTool(t *testing.T) {
 		},
 	})
 
-	_, err := m.UseAgent("default")
+	_, err := m.Agent("default")
 	if err == nil || !strings.Contains(err.Error(), `unknown tool "missing"`) {
 		t.Fatalf("UseAgent error = %v", err)
 	}
@@ -102,7 +102,7 @@ func TestDelegateUsesEphemeralSession(t *testing.T) {
 	}))
 	defer server.Close()
 
-	m := NewAgentManager(&config.Config{
+	m := New(&config.Config{
 		Profiles: map[string]*config.ProfileConfig{
 			"researcher": {
 				Provider:  "openai",
@@ -133,7 +133,7 @@ func TestDelegateUsesEphemeralSession(t *testing.T) {
 }
 
 func TestDelegateLimitsRecursion(t *testing.T) {
-	m := NewAgentManager(&config.Config{})
+	m := New(&config.Config{})
 	ctx := context.WithValue(context.Background(), delegateDepthKey{}, maxDelegateDepth)
 	_, err := m.Delegate(ctx, "anything", "task")
 	if err == nil || !strings.Contains(err.Error(), "maximum delegation depth") {

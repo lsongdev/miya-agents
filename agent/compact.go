@@ -251,3 +251,43 @@ func isContextOverflow(err error) bool {
 	}
 	return false
 }
+
+// CompactCommand reports whether prompt is the /compact command, and returns
+// the instructions that follow it.
+func CompactCommand(prompt string) (instructions string, ok bool) {
+	rest, found := strings.CutPrefix(strings.TrimSpace(prompt), "/compact")
+	if !found || (rest != "" && !strings.ContainsAny(rest[:1], " \t\n")) {
+		return "", false
+	}
+	return strings.TrimSpace(rest), true
+}
+
+// RunCompactCommand compacts sess on request and returns the reply to show.
+// The command is not added to the log; only the compaction it causes is.
+func RunCompactCommand(ctx context.Context, ag *Agent, sess *session.Session, instructions string) (string, error) {
+	var note string
+	err := ag.Compact(ctx, sess, instructions, func(event Event) error {
+		note = CompactionNote(event) + "."
+		return nil
+	})
+	if errors.Is(err, ErrNothingToCompact) {
+		return "Nothing to compact yet: the conversation is still short.", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("compact: %w", err)
+	}
+	return note, nil
+}
+
+// CompactionNote describes a compaction event in one line.
+func CompactionNote(event Event) string {
+	c := event.Compaction
+	switch {
+	case c == nil:
+		return "Context compaction failed: " + event.Text
+	case c.TokensAfter > 0:
+		return fmt.Sprintf("Context compacted: about %d → %d tokens", c.TokensBefore, c.TokensAfter)
+	default:
+		return "Context compacted"
+	}
+}

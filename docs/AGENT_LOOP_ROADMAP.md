@@ -1,12 +1,13 @@
 # Agent Loop Roadmap
 
-Status: target design; steps 1 to 4 of [Order of Work](#order-of-work) are implemented
+Status: implemented. All five steps of [Order of Work](#order-of-work) are done;
+what is left is listed under [Remaining](#remaining).
 
 Updated: 2026-11-11
 
-This note is the target architecture for the miya-agents runtime: package
+This note describes the architecture of the miya-agents runtime: package
 layering, the model-facing message types, the session format, the event
-stream, and context compaction. It replaces the earlier roadmap, whose
+stream, and context compaction. It replaced an earlier roadmap, whose
 skill-guided compaction and dual `messages`/`events` session file are
 superseded here (see [Superseded Decisions](#superseded-decisions)).
 
@@ -19,16 +20,18 @@ superseded here (see [Superseded Decisions](#superseded-decisions)).
 - A session is an append-only JSONL log (see [Session Log](#session-log)).
   The model context and ACP replay are both derived from it. `session` no
   longer imports `acp`.
-- `agent.Manager` both assembles agents from config and implements
-  `acp.ServerHandler`.
+- `runtime.Runtime` assembles agents from config. `acpserver.Server`
+  implements `acp.ServerHandler` on top of it. `agent` imports only `llm`
+  and `session`.
+- The CLI lives in `cmd/miya`.
 - The loop compacts the context itself (see
   [Context Compaction](#context-compaction)); `/compact` does it on request.
 
-## Problems
+## Problems This Design Solved
 
-1. **The core depends on its transport.** `agent` implements the ACP server,
-   so the loop cannot be used without the protocol package. (`session` no
-   longer imports `acp`, since step 3.)
+1. **The core depended on its transport.** `session` imported `acp`, and
+   `agent` implemented the ACP server, so the loop could not be used without
+   the protocol package. *Fixed by steps 3 and 5.*
 2. **OpenAI Chat was the implicit canonical model** and the persisted format.
    It cannot carry content blocks, images, thinking signatures, or cache
    hints. *Fixed by step 1*, except that `Manager.Prompt` still forwards only
@@ -46,7 +49,7 @@ superseded here (see [Superseded Decisions](#superseded-decisions)).
    four implementations, `attach_file` was special-cased by tool name inside
    the loop, and `UsageEvent` carried nothing. *Fixed by step 2.*
 
-## Target Layering
+## Layering
 
 ```text
 openai/  anthropic/  sse/    wire SDKs; import nothing else from this module
@@ -63,7 +66,7 @@ runtime/                     config -> Agent assembly, session store, delegation
 acp/                         protocol library (types, client, server transport)
 acpserver/                   maps runtime calls and events onto ACP
         ^
-cmd/miya/                    CLI (today: root main.go, readline.go, markdown.go)
+cmd/miya/                    CLI
 
 proxy/                       separate product; depends on the wire SDKs only
 ```
@@ -74,11 +77,8 @@ Rules:
 - `agent` and `session` import neither `acp` nor `config`. An `Agent` is built
   from plain options; `runtime` translates `config.ProfileConfig` into them.
 - `openai/` and `anthropic/` stay faithful to their wire protocols and know
-  nothing about agents. `anthropic/openai.go` still imports `openai` for the
-  proxy's conversions; it moves under `proxy/` in step 5.
-- `Tool` belongs to `agent`. Until `agent.Manager` moves to `runtime/`
-  (step 5), `agent` imports `tools`, so the interface is declared in `tools`
-  and aliased as `agent.Tool`.
+  nothing about agents.
+- `Tool` and `FileTool` are declared in `agent`; `tools` implements them.
 - `miya-channels` and `miya-desktop` reach the runtime only through ACP, over
   stdio or `acp.DialInProcess`.
 
@@ -258,9 +258,19 @@ emits `session_info`.
    **Done.**
 4. Implement compaction and `/compact` on the new session model. **Done.**
 5. Split the ACP server out of `agent/manager.go` into `runtime/` and
-   `acpserver/`; move the CLI to `cmd/miya/`.
+   `acpserver/`; move the CLI to `cmd/miya/`. **Done.**
 
-Step 3 is the one that unlocks compaction.
+## Remaining
+
+- `anthropic/openai.go` still imports `openai`, for the conversions the proxy
+  uses. It is the one exception to "wire SDKs import nothing else" and
+  belongs under `proxy/`.
+- `acpserver` forwards only the text blocks of a prompt. `llm` and both
+  adapters already carry images.
+- Embedders construct the server as
+  `acpserver.New(runtime.New(cfg))`, replacing `agent.NewAgentManager(cfg)`.
+  `miya-channels` and `miya-desktop` need that one-line change when they
+  update this dependency.
 
 ## Notes
 

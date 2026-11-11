@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/lsongdev/miya-agents/agent"
 	"github.com/lsongdev/miya-agents/llm"
 	"github.com/lsongdev/miya-agents/mcp"
 )
@@ -14,7 +15,7 @@ import (
 type McpServer struct {
 	config *mcp.McpServerConfig
 	client *mcp.Client
-	Tools  []Tool
+	Tools  []agent.Tool
 }
 
 func NewMcpServer(config *mcp.McpServerConfig) (server *McpServer, err error) {
@@ -36,7 +37,7 @@ func NewMcpServer(config *mcp.McpServerConfig) (server *McpServer, err error) {
 		err = fmt.Errorf("failed to list tools: %w", err)
 		return
 	}
-	var tools []Tool
+	var tools []agent.Tool
 	for _, mcpTool := range mcpTools {
 		tool := NewMcpTool(client, &mcpTool)
 		tools = append(tools, tool)
@@ -51,10 +52,10 @@ func NewMcpServer(config *mcp.McpServerConfig) (server *McpServer, err error) {
 
 func (s *McpServer) Close() {
 	s.client.Close()
-	s.Tools = []Tool{}
+	s.Tools = []agent.Tool{}
 }
 
-// McpTool is a wrapper that implements the Tool interface.
+// McpTool is a wrapper that implements the agent.Tool interface.
 // It delegates to the McpManager for actual tool execution.
 type McpTool struct {
 	rpc  *mcp.Client
@@ -63,7 +64,7 @@ type McpTool struct {
 
 // NewMcpTool creates a tool wrapper for a specific tool.
 // Deprecated: Use McpManager directly for multi-server support.
-func NewMcpTool(rpc *mcp.Client, tool *mcp.Tool) Tool {
+func NewMcpTool(rpc *mcp.Client, tool *mcp.Tool) agent.Tool {
 	return &McpTool{
 		rpc:  rpc,
 		tool: tool,
@@ -71,7 +72,7 @@ func NewMcpTool(rpc *mcp.Client, tool *mcp.Tool) Tool {
 }
 
 type namedMcpTool struct {
-	tool Tool
+	tool agent.Tool
 	def  llm.ToolDef
 }
 
@@ -83,7 +84,7 @@ func (m *namedMcpTool) Run(ctx context.Context, args string) string {
 	return m.tool.Run(ctx, args)
 }
 
-// Def implements [Tool].
+// Def implements [agent.Tool].
 func (m *McpTool) Def() llm.ToolDef {
 	var params map[string]any
 	if err := json.Unmarshal(m.tool.InputSchema, &params); err != nil {
@@ -99,7 +100,7 @@ func (m *McpTool) Def() llm.ToolDef {
 	}
 }
 
-// Run implements [Tool].
+// Run implements [agent.Tool].
 func (m *McpTool) Run(ctx context.Context, args string) string {
 	var arguments map[string]any
 	if err := json.Unmarshal([]byte(args), &arguments); err != nil {
@@ -160,7 +161,7 @@ func formatToolResultError(result *mcp.ToolResult) string {
 
 type McpManager struct {
 	Servers  map[string]McpServer
-	Tools    map[string]Tool
+	Tools    map[string]agent.Tool
 	ToolDefs []llm.ToolDef
 }
 
@@ -176,7 +177,7 @@ func NewMcpManager(config map[string]*mcp.McpServerConfig) (manager *McpManager)
 	}
 	manager = &McpManager{
 		Servers:  mcpServers,
-		Tools:    make(map[string]Tool),
+		Tools:    make(map[string]agent.Tool),
 		ToolDefs: []llm.ToolDef{},
 	}
 	for serverName, server := range manager.Servers {

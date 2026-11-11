@@ -7,11 +7,7 @@ import (
 
 	"github.com/lsongdev/miya-agents/llm"
 	"github.com/lsongdev/miya-agents/session"
-	"github.com/lsongdev/miya-agents/tools"
 )
-
-// Tool is something the model can call.
-type Tool = tools.Tool
 
 // Agent runs a model in a loop, executing the tools it calls until it
 // finishes its turn. It holds no per-conversation state; that lives in the
@@ -170,7 +166,7 @@ func (a *Agent) call(ctx context.Context, call llm.ToolCall, sink Sink) (llm.Too
 	result := llm.ToolResult{ID: call.ID, Name: call.Name}
 	var files []llm.Media
 	switch tool := a.tool(call.Name).(type) {
-	case tools.FileTool:
+	case FileTool:
 		result.Content, files = tool.RunFiles(ctx, call.Arguments)
 	case Tool:
 		result.Content = tool.Run(ctx, call.Arguments)

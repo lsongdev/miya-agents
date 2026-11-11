@@ -1,18 +1,18 @@
-package agent
+package acpserver
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/lsongdev/miya-agents/acp"
+	"github.com/lsongdev/miya-agents/agent"
 	"github.com/lsongdev/miya-agents/llm"
 	"github.com/lsongdev/miya-agents/session"
 )
 
-// acpSink returns a Sink that forwards events to an ACP client.
-func acpSink(sender acp.SessionUpdateSender) Sink {
-	return func(event Event) error {
+// acpSink returns a agent.Sink that forwards events to an ACP client.
+func acpSink(sender acp.SessionUpdateSender) agent.Sink {
+	return func(event agent.Event) error {
 		if update, ok := acpUpdate(event); ok {
 			return sender.Send(update)
 		}
@@ -27,12 +27,12 @@ func replaySession(sess *session.Session, contextWindow int, sender acp.SessionU
 	var usage *llm.Usage
 	for _, entry := range sess.Entries {
 		if meta := entry.Meta; meta != nil && meta.Title != "" {
-			if err := sink(Event{Type: EventSessionInfo, Title: meta.Title}); err != nil {
+			if err := sink(agent.Event{Type: agent.EventSessionInfo, Title: meta.Title}); err != nil {
 				return err
 			}
 		}
 		if c := entry.Compaction; c != nil {
-			if err := sink(Event{Type: EventCompaction, Compaction: &CompactionEvent{TokensBefore: c.TokensBefore}}); err != nil {
+			if err := sink(agent.Event{Type: agent.EventCompaction, Compaction: &agent.CompactionEvent{TokensBefore: c.TokensBefore}}); err != nil {
 				return err
 			}
 			usage = nil // counts from before no longer describe the context
@@ -45,7 +45,7 @@ func replaySession(sess *session.Session, contextWindow int, sender acp.SessionU
 			usage = entry.Usage
 		}
 		for _, file := range entry.Files {
-			if err := sink(Event{Type: EventFile, File: &file}); err != nil {
+			if err := sink(agent.Event{Type: agent.EventFile, File: &file}); err != nil {
 				return err
 			}
 		}
@@ -55,14 +55,14 @@ func replaySession(sess *session.Session, contextWindow int, sender acp.SessionU
 			case block.Type == llm.BlockText && message.Role == llm.RoleUser:
 				err = sender.Send(userMessageUpdate(block.Text))
 			case block.Type == llm.BlockText:
-				err = sink(Event{Type: EventText, Text: block.Text})
+				err = sink(agent.Event{Type: agent.EventText, Text: block.Text})
 			case block.Type == llm.BlockThinking:
-				err = sink(Event{Type: EventThought, Text: block.Text})
+				err = sink(agent.Event{Type: agent.EventThought, Text: block.Text})
 			case block.Type == llm.BlockToolCall && block.ToolCall != nil:
-				err = sink(Event{Type: EventToolStart, Tool: &ToolEvent{Call: *block.ToolCall}})
+				err = sink(agent.Event{Type: agent.EventToolStart, Tool: &agent.ToolEvent{Call: *block.ToolCall}})
 			case block.Type == llm.BlockToolResult && block.ToolResult != nil:
 				result := block.ToolResult
-				err = sink(Event{Type: EventToolDone, Tool: &ToolEvent{
+				err = sink(agent.Event{Type: agent.EventToolDone, Tool: &agent.ToolEvent{
 					Call:   llm.ToolCall{ID: result.ID, Name: result.Name},
 					Result: result.Content,
 					Failed: result.IsError,
@@ -76,56 +76,43 @@ func replaySession(sess *session.Session, contextWindow int, sender acp.SessionU
 	// Only the latest usage matters to a client: it is the current fill of
 	// the context window.
 	if usage != nil {
-		return sink(Event{Type: EventUsage, Usage: usage, ContextWindow: contextWindow})
+		return sink(agent.Event{Type: agent.EventUsage, Usage: usage, ContextWindow: contextWindow})
 	}
 	return nil
 }
 
 // acpUpdate maps an event to the ACP session update that represents it. It
 // reports false for events with no ACP counterpart.
-func acpUpdate(event Event) (acp.SessionUpdate, bool) {
+func acpUpdate(event agent.Event) (acp.SessionUpdate, bool) {
 	switch event.Type {
-	case EventText:
+	case agent.EventText:
 		return assistantMessageUpdate(event.Text), event.Text != ""
-	case EventThought:
+	case agent.EventThought:
 		return thoughtUpdate(event.Text), event.Text != ""
-	case EventToolStart:
+	case agent.EventToolStart:
 		if event.Tool != nil {
 			return toolCallUpdate(*event.Tool), true
 		}
-	case EventToolDone:
+	case agent.EventToolDone:
 		if event.Tool != nil {
 			return toolCallDoneUpdate(*event.Tool), true
 		}
-	case EventFile:
+	case agent.EventFile:
 		if event.File != nil {
 			return fileMessageUpdate(*event.File), true
 		}
-	case EventUsage:
+	case agent.EventUsage:
 		if event.Usage != nil {
 			return usageUpdate(event), true
 		}
-	case EventSessionInfo:
+	case agent.EventSessionInfo:
 		return sessionInfoUpdate(event.Title), event.Title != ""
-	case EventCompaction:
+	case agent.EventCompaction:
 		// ACP has no update for this; a thought is shown by clients that
 		// show the agent's working and hidden by those that do not.
-		return thoughtUpdate("\n[" + CompactionNote(event) + "]\n"), true
+		return thoughtUpdate("\n[" + agent.CompactionNote(event) + "]\n"), true
 	}
 	return acp.SessionUpdate{}, false
-}
-
-// CompactionNote describes a compaction event in one line.
-func CompactionNote(event Event) string {
-	c := event.Compaction
-	switch {
-	case c == nil:
-		return "Context compaction failed: " + event.Text
-	case c.TokensAfter > 0:
-		return fmt.Sprintf("Context compacted: about %d → %d tokens", c.TokensBefore, c.TokensAfter)
-	default:
-		return "Context compacted"
-	}
 }
 
 func userMessageUpdate(text string) acp.SessionUpdate {
@@ -186,14 +173,14 @@ func thoughtUpdate(text string) acp.SessionUpdate {
 	}
 }
 
-func toolCallUpdate(event ToolEvent) acp.SessionUpdate {
+func toolCallUpdate(event agent.ToolEvent) acp.SessionUpdate {
 	return acp.SessionUpdate{
 		SessionUpdate: "tool_call",
 		ToolCall:      acpToolCall(event),
 	}
 }
 
-func toolCallDoneUpdate(event ToolEvent) acp.SessionUpdate {
+func toolCallDoneUpdate(event agent.ToolEvent) acp.SessionUpdate {
 	return acp.SessionUpdate{
 		SessionUpdate:  "tool_call_update",
 		ToolCallUpdate: acpToolCallUpdate(event, toolCallStatus(event)),
@@ -209,7 +196,7 @@ func sessionInfoUpdate(title string) acp.SessionUpdate {
 
 // usageUpdate reports how much of the context window the last model call
 // occupied: its whole prompt plus the response it produced.
-func usageUpdate(event Event) acp.SessionUpdate {
+func usageUpdate(event agent.Event) acp.SessionUpdate {
 	return acp.SessionUpdate{
 		SessionUpdate: "usage_update",
 		Usage: &acp.UsageUpdate{
@@ -219,21 +206,21 @@ func usageUpdate(event Event) acp.SessionUpdate {
 	}
 }
 
-func toolCallStatus(event ToolEvent) acp.ToolCallStatus {
+func toolCallStatus(event agent.ToolEvent) acp.ToolCallStatus {
 	if event.Failed {
 		return acp.ToolCallFailed
 	}
 	return acp.ToolCallCompleted
 }
 
-func toolTitle(event ToolEvent) string {
+func toolTitle(event agent.ToolEvent) string {
 	if event.Call.Name == "" {
 		return "Tool call"
 	}
 	return event.Call.Name
 }
 
-func acpToolCall(event ToolEvent) *acp.ToolCall {
+func acpToolCall(event agent.ToolEvent) *acp.ToolCall {
 	return &acp.ToolCall{
 		ToolCallID: acp.ToolCallID(event.Call.ID),
 		Title:      toolTitle(event),
@@ -247,7 +234,7 @@ func acpToolCall(event ToolEvent) *acp.ToolCall {
 	}
 }
 
-func acpToolCallUpdate(event ToolEvent, status acp.ToolCallStatus) *acp.ToolCallUpdate {
+func acpToolCallUpdate(event agent.ToolEvent, status acp.ToolCallStatus) *acp.ToolCallUpdate {
 	return &acp.ToolCallUpdate{
 		ToolCallID: acp.ToolCallID(event.Call.ID),
 		Status:     &status,

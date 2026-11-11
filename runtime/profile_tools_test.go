@@ -1,4 +1,4 @@
-package agent
+package runtime
 
 import (
 	"net/http"
@@ -17,7 +17,7 @@ func TestUseAgentSkipsUnselectedMCPServers(t *testing.T) {
 	}))
 	defer server.Close()
 
-	m := NewAgentManager(&config.Config{
+	m := New(&config.Config{
 		Profiles: map[string]*config.ProfileConfig{
 			"default": {
 				Provider:  "openai",
@@ -34,7 +34,7 @@ func TestUseAgentSkipsUnselectedMCPServers(t *testing.T) {
 		},
 	})
 
-	if _, err := m.UseAgent("default"); err != nil {
+	if _, err := m.Agent("default"); err != nil {
 		t.Fatalf("UseAgent: %v", err)
 	}
 	if got := requests.Load(); got != 0 {

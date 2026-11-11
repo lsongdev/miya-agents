@@ -1,4 +1,4 @@
-package agent
+package acpserver
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 	"github.com/lsongdev/miya-agents/acp"
 	"github.com/lsongdev/miya-agents/config"
 	"github.com/lsongdev/miya-agents/llm"
+	"github.com/lsongdev/miya-agents/runtime"
 	"github.com/lsongdev/miya-agents/session"
 )
 
@@ -60,12 +61,12 @@ func TestPromptRunsToolRoundTripAndPersists(t *testing.T) {
 	}))
 	defer server.Close()
 
-	m := NewAgentManager(&config.Config{
+	m := New(runtime.New(&config.Config{
 		Profiles: map[string]*config.ProfileConfig{
 			"default": {Provider: "openai", ModelName: "test", Workspace: workspace, Tools: []string{"read_file"}},
 		},
 		Providers: map[string]*config.ProviderConfig{"openai": {APIBase: server.URL}},
-	})
+	}))
 	ctx := context.Background()
 	sender := &recordingSender{}
 	created, err := m.NewSession(ctx, &acp.NewSessionRequest{}, sender)
@@ -175,12 +176,12 @@ func TestPromptHandlesCompactCommand(t *testing.T) {
 	}))
 	defer server.Close()
 
-	m := NewAgentManager(&config.Config{
+	m := New(runtime.New(&config.Config{
 		Profiles: map[string]*config.ProfileConfig{
 			"default": {Provider: "openai", ModelName: "test", Workspace: workspace, Tools: []string{"read_file"}, ContextWindowTokens: 40},
 		},
 		Providers: map[string]*config.ProviderConfig{"openai": {APIBase: server.URL}},
-	})
+	}))
 	sess, err := session.Create("default")
 	if err != nil {
 		t.Fatal(err)

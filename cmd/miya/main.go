@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/lsongdev/miya-agents/acp"
+	"github.com/lsongdev/miya-agents/acpserver"
 	"github.com/lsongdev/miya-agents/agent"
 	"github.com/lsongdev/miya-agents/config"
 	"github.com/lsongdev/miya-agents/logging"
@@ -21,6 +22,7 @@ import (
 	"github.com/lsongdev/miya-agents/proxy/providers/claudecode"
 	"github.com/lsongdev/miya-agents/proxy/providers/codex"
 	openaiprovider "github.com/lsongdev/miya-agents/proxy/providers/openai"
+	"github.com/lsongdev/miya-agents/runtime"
 	"github.com/lsongdev/miya-agents/session"
 )
 
@@ -93,8 +95,7 @@ func acpServeCommand() {
 		os.Exit(1)
 	}
 
-	agentManager := agent.NewAgentManager(cfg)
-	server := acp.NewServer(agentManager)
+	server := acp.NewServer(acpserver.New(runtime.New(cfg)))
 	if err := server.Serve(); err != nil {
 		fmt.Fprintf(os.Stderr, "ACP server error: %v\n", err)
 		os.Exit(1)
@@ -154,8 +155,7 @@ func runCommand(args []string) {
 		agentName = "default"
 	}
 
-	agentManager := agent.NewAgentManager(cfg)
-	ag, err := agentManager.UseAgent(agentName)
+	ag, err := runtime.New(cfg).Agent(agentName)
 	if err != nil {
 		log.Fatalf("profile error: %v", err)
 	}
@@ -326,7 +326,7 @@ func sessionsCompactCommand(args []string) {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
-	ag, err := agent.NewAgentManager(cfg).UseAgent(sess.AgentName)
+	ag, err := runtime.New(cfg).Agent(sess.AgentName)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
