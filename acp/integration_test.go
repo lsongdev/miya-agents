@@ -13,11 +13,6 @@ func TestOpenCodeACP(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skip integration test in short mode")
 	}
-	// Opt-in only: a live opencode session talks to a hosted model account.
-	if os.Getenv("OPENCODE_INTEGRATION") != "1" {
-		t.Skip("set OPENCODE_INTEGRATION=1 to run the opencode ACP integration test")
-	}
-
 	path, err := exec.LookPath("opencode")
 	if err != nil {
 		t.Skip("opencode not found")
