@@ -5,30 +5,73 @@ import (
 	"strings"
 
 	"github.com/lsongdev/miya-agents/acp"
+	"github.com/lsongdev/miya-agents/llm"
 	"github.com/lsongdev/miya-agents/session"
 )
 
-// Record returns a Sink that appends each event to sess's replay log before
-// passing it to next, and saves sess when the turn is done.
-func Record(sess *session.Session, next Sink) Sink {
+// acpSink returns a Sink that forwards events to an ACP client.
+func acpSink(sender acp.SessionUpdateSender) Sink {
 	return func(event Event) error {
 		if update, ok := acpUpdate(event); ok {
-			sess.AppendEvent(update)
+			return sender.Send(update)
 		}
-		if event.Type == EventDone {
-			if err := sess.Save(); err != nil {
-				return err
-			}
-		}
-		return next(event)
+		return nil
 	}
 }
 
-func RecordUserMessage(sess *session.Session, text string) {
-	if text == "" {
-		return
+// replaySession sends a client the session's history, as the events that
+// would have been reported had it watched the conversation live.
+func replaySession(sess *session.Session, contextWindow int, sender acp.SessionUpdateSender) error {
+	sink := acpSink(sender)
+	var usage *llm.Usage
+	for _, entry := range sess.Entries {
+		if meta := entry.Meta; meta != nil && meta.Title != "" {
+			if err := sink(Event{Type: EventSessionInfo, Title: meta.Title}); err != nil {
+				return err
+			}
+		}
+		message := entry.Message
+		if message == nil {
+			continue
+		}
+		if entry.Usage != nil {
+			usage = entry.Usage
+		}
+		for _, file := range entry.Files {
+			if err := sink(Event{Type: EventFile, File: &file}); err != nil {
+				return err
+			}
+		}
+		for _, block := range message.Content {
+			var err error
+			switch {
+			case block.Type == llm.BlockText && message.Role == llm.RoleUser:
+				err = sender.Send(userMessageUpdate(block.Text))
+			case block.Type == llm.BlockText:
+				err = sink(Event{Type: EventText, Text: block.Text})
+			case block.Type == llm.BlockThinking:
+				err = sink(Event{Type: EventThought, Text: block.Text})
+			case block.Type == llm.BlockToolCall && block.ToolCall != nil:
+				err = sink(Event{Type: EventToolStart, Tool: &ToolEvent{Call: *block.ToolCall}})
+			case block.Type == llm.BlockToolResult && block.ToolResult != nil:
+				result := block.ToolResult
+				err = sink(Event{Type: EventToolDone, Tool: &ToolEvent{
+					Call:   llm.ToolCall{ID: result.ID, Name: result.Name},
+					Result: result.Content,
+					Failed: result.IsError,
+				}})
+			}
+			if err != nil {
+				return err
+			}
+		}
 	}
-	sess.AppendEvent(userMessageUpdate(text))
+	// Only the latest usage matters to a client: it is the current fill of
+	// the context window.
+	if usage != nil {
+		return sink(Event{Type: EventUsage, Usage: usage, ContextWindow: contextWindow})
+	}
+	return nil
 }
 
 // acpUpdate maps an event to the ACP session update that represents it. It
@@ -75,13 +118,13 @@ func assistantMessageUpdate(text string) acp.SessionUpdate {
 	}
 }
 
-func fileMessageUpdate(event File) acp.SessionUpdate {
+func fileMessageUpdate(event llm.Media) acp.SessionUpdate {
 	contentType := "resource"
 	if strings.HasPrefix(event.MimeType, "image/") {
 		contentType = "image"
 	} else if strings.HasPrefix(event.MimeType, "audio/") {
 		contentType = "audio"
-	} else if event.Data == "" && event.URI != "" {
+	} else if event.Data == "" && event.URL != "" {
 		contentType = "resource_link"
 	}
 	size := event.Size
@@ -92,13 +135,13 @@ func fileMessageUpdate(event File) acp.SessionUpdate {
 		Name:     event.Name,
 		Size:     &size,
 	}
-	if event.URI != "" {
-		content.URI = &event.URI
+	if event.URL != "" {
+		content.URI = &event.URL
 	}
 	if contentType == "resource" && event.Data != "" {
 		mimeType := event.MimeType
 		resource, err := json.Marshal(acp.BlobResourceContents{
-			URI:      event.URI,
+			URI:      event.URL,
 			Blob:     event.Data,
 			MimeType: &mimeType,
 		})

@@ -64,8 +64,8 @@ func TestRunRejectsInterruptedStream(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "connection reset") {
 		t.Fatalf("Run error = %v", err)
 	}
-	if len(sess.Messages) != 0 {
-		t.Fatalf("interrupted response was saved: %#v", sess.Messages)
+	if got := sess.Context(); len(got) != 0 {
+		t.Fatalf("interrupted response was saved: %#v", got)
 	}
 }
 
@@ -117,7 +117,7 @@ func TestRunExecutesToolCallsAndContinues(t *testing.T) {
 	ag.System = "be brief"
 	ag.Tools = []Tool{echoTool{}}
 	sess := session.New("test")
-	sess.AppendRequest("go")
+	sess.AddUser("go")
 
 	if err := ag.Run(context.Background(), sess, Discard); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -146,7 +146,7 @@ func TestRunExecutesToolCallsAndContinues(t *testing.T) {
 	if unknown.ID != "call_2" || !unknown.IsError || !strings.Contains(unknown.Content, "unknown tool") {
 		t.Fatalf("unknown tool result = %#v", unknown)
 	}
-	if got := sess.Messages[len(sess.Messages)-1].Text(); got != "all done" {
+	if got := sess.Entries[len(sess.Entries)-1].Message.Text(); got != "all done" {
 		t.Fatalf("final message = %q", got)
 	}
 }
@@ -155,8 +155,8 @@ type fileTool struct{}
 
 func (fileTool) Def() llm.ToolDef                   { return llm.ToolDef{Name: "attach"} }
 func (fileTool) Run(context.Context, string) string { return "attached" }
-func (fileTool) RunFiles(context.Context, string) (string, []File) {
-	return "attached", []File{{Name: "a.png", MimeType: "image/png", Size: 3, Data: "AAAA"}}
+func (fileTool) RunFiles(context.Context, string) (string, []llm.Media) {
+	return "attached", []llm.Media{{Name: "a.png", MimeType: "image/png", Size: 3, Data: "AAAA"}}
 }
 
 func TestRunReportsEventsInOrder(t *testing.T) {
@@ -178,7 +178,8 @@ func TestRunReportsEventsInOrder(t *testing.T) {
 		events = append(events, event)
 		return nil
 	}
-	if err := ag.Run(context.Background(), session.New("test"), sink); err != nil {
+	sess := session.New("test")
+	if err := ag.Run(context.Background(), sess, sink); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -198,6 +199,16 @@ func TestRunReportsEventsInOrder(t *testing.T) {
 	}
 	if got := events[5].Tool; got.Call.ID != "c1" || got.Result != "attached" || got.Failed {
 		t.Fatalf("tool_done event = %#v", got)
+	}
+
+	// The log records what the events reported: usage with the assistant
+	// message, the file with the tool result.
+	entries := sess.Entries
+	if got := entries[1]; got.Usage != usage || len(got.Message.ToolCalls()) != 1 {
+		t.Fatalf("assistant entry = %#v", got)
+	}
+	if got := entries[2]; len(got.Files) != 1 || got.Files[0].Name != "a.png" || got.Message.Role != llm.RoleTool {
+		t.Fatalf("tool entry = %#v", got)
 	}
 }
 

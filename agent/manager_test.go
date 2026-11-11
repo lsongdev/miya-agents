@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/lsongdev/miya-agents/acp"
@@ -242,40 +243,42 @@ func (s *recordingSender) Send(update acp.SessionUpdate) error {
 	return nil
 }
 
-func TestReplaySessionReplaysEventLog(t *testing.T) {
-	sess := &session.Session{
-		Events: []session.Event{
-			{ID: "evt_000001", Update: acp.SessionUpdate{
-				SessionUpdate: "user_message_chunk",
-				Content:       acp.ContentBlock{Type: "text", Text: "read file"},
-			}},
-			{ID: "evt_000002", Update: acp.SessionUpdate{
-				SessionUpdate: "tool_call",
-				ToolCall:      acpToolCall(ToolEvent{Call: llm.ToolCall{ID: "call-1", Name: "read_file", Arguments: `{"path":"README.md"}`}}),
-			}},
-			{ID: "evt_000003", Update: acp.SessionUpdate{
-				SessionUpdate:  "tool_call_update",
-				ToolCallUpdate: acpToolCallUpdate(ToolEvent{Call: llm.ToolCall{ID: "call-1"}, Result: "hello"}, acp.ToolCallCompleted),
-			}},
-		},
-	}
+func TestReplaySessionDerivesUpdatesFromLog(t *testing.T) {
+	sess := session.New("default")
+	sess.AddUser("read file")
+	sess.SetTitle("Read a file")
+	call := llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{
+		llm.Thinking("need the file"),
+		{Type: llm.BlockToolCall, ToolCall: &llm.ToolCall{ID: "call-1", Name: "read_file", Arguments: `{"path":"README.md"}`}},
+	}}
+	sess.Add(session.Entry{Message: &call, Usage: &llm.Usage{InputTokens: 50, OutputTokens: 5}})
+	result := llm.ToolResultMessage(llm.ToolResult{ID: "call-1", Name: "read_file", Content: "hello"})
+	sess.Add(session.Entry{Message: &result, Files: []llm.Media{{Name: "a.png", MimeType: "image/png", Data: "AAAA"}}})
+	answer := llm.AssistantText("It says hello.")
+	sess.Add(session.Entry{Message: &answer, Usage: &llm.Usage{InputTokens: 70, OutputTokens: 10}})
+
 	sender := &recordingSender{}
-
-	if err := replaySession(sess, sender); err != nil {
-		t.Fatalf("replaySession: %v", err)
+	if err := replaySession(sess, 1000, sender); err != nil {
+		t.Fatalf("replay: %v", err)
 	}
 
-	if len(sender.updates) != len(sess.Events) {
-		t.Fatalf("updates = %d, want %d", len(sender.updates), len(sess.Events))
+	var kinds []string
+	for _, update := range sender.updates {
+		kinds = append(kinds, update.SessionUpdate)
 	}
-	if sender.updates[0].SessionUpdate != "user_message_chunk" {
-		t.Fatalf("first update = %q", sender.updates[0].SessionUpdate)
+	want := "user_message_chunk session_info_update agent_thought_chunk tool_call agent_message_chunk tool_call_update agent_message_chunk usage_update"
+	if got := strings.Join(kinds, " "); got != want {
+		t.Fatalf("updates = %q\nwant      %q", got, want)
 	}
-	if sender.updates[1].ToolCall == nil || sender.updates[1].ToolCall.ToolCallID != "call-1" {
-		t.Fatal("missing replayed tool_call update")
+	if got := sender.updates[3].ToolCall; got.ToolCallID != "call-1" || got.Kind != acp.ToolKindRead {
+		t.Fatalf("tool call = %#v", got)
 	}
-	if sender.updates[2].ToolCallUpdate == nil || sender.updates[2].ToolCallUpdate.ToolCallID != "call-1" {
-		t.Fatal("missing replayed tool_call_update update")
+	if got := sender.updates[4].Content; got.Type != "image" || got.Data != "AAAA" {
+		t.Fatalf("file = %#v", got)
+	}
+	// Only the latest usage is replayed.
+	if got := sender.updates[7].Usage; got.Used != 80 || got.Size != 1000 {
+		t.Fatalf("usage = %#v", got)
 	}
 }
 

@@ -1,6 +1,6 @@
 # Agent Loop Roadmap
 
-Status: target design; steps 1 and 2 of [Order of Work](#order-of-work) are implemented
+Status: target design; steps 1 to 3 of [Order of Work](#order-of-work) are implemented
 
 Updated: 2026-11-11
 
@@ -16,10 +16,9 @@ superseded here (see [Superseded Decisions](#superseded-decisions)).
   per SDK. `agent.Agent` is built from plain fields and calls an `llm.Model`.
 - `agent.Agent.Run` drives the loop and reports `Event` values to a `Sink`
   function, including real token usage after each model call.
-- A session is one JSON file holding mutable `messages` (`[]llm.Message`) for
-  the model and append-only `events` (as `acp.SessionUpdate`) for UI replay.
-  Every save rewrites the whole file. Files written with OpenAI-shaped
-  messages are converted on load.
+- A session is an append-only JSONL log (see [Session Log](#session-log)).
+  The model context and ACP replay are both derived from it. `session` no
+  longer imports `acp`.
 - `agent.Manager` both assembles agents from config and implements
   `acp.ServerHandler`.
 - There is no context compaction. The earlier context maintenance notice has
@@ -27,16 +26,17 @@ superseded here (see [Superseded Decisions](#superseded-decisions)).
 
 ## Problems
 
-1. **The core depends on its transport.** `session` imports `acp`, and
-   `agent` implements the ACP server. The loop cannot be used or tested
-   without the protocol package.
+1. **The core depends on its transport.** `agent` implements the ACP server,
+   so the loop cannot be used without the protocol package. (`session` no
+   longer imports `acp`, since step 3.)
 2. **OpenAI Chat was the implicit canonical model** and the persisted format.
    It cannot carry content blocks, images, thinking signatures, or cache
    hints. *Fixed by step 1*, except that `Manager.Prompt` still forwards only
    the text blocks of a prompt.
-3. **A session has two sources of truth.** `messages` and `events` describe
-   the same conversation and must be kept in step by hand. Compaction has to
-   rewrite `messages`, which is why "who edits the file" had no good answer.
+3. **A session had two sources of truth.** `messages` and `events` described
+   the same conversation and had to be kept in step by hand. Compaction had
+   to rewrite `messages`, which is why "who edits the file" had no good
+   answer. *Fixed by step 3.*
 4. **Compaction is delegated to the model.** A model editing the file that
    backs its own running session races with the next save, can split a tool
    call from its result, and depends on the model noticing a notice. The
@@ -130,24 +130,35 @@ line is one typed entry:
 
 | Entry | Content |
 | --- | --- |
-| `meta` | agent name, title, cwd; later `meta` entries override earlier ones |
-| `user` | user message blocks |
-| `assistant` | complete assistant message: thinking, text, tool calls, usage |
-| `tool_result` | result blocks for one tool call, status, attachments |
-| `compaction` | summary, first kept entry id, token count before |
+| `meta` | agent name, title; later `meta` entries override the fields they set |
+| `message` | one complete user, assistant or tool message. An assistant entry also carries the token usage of its model call; a tool entry also carries the files the tool handed to the user |
+| `compaction` | summary, first kept entry id, token count before (step 4) |
+
+Each entry has an `id` (its position in the log) and a `time`.
 
 Entries are never rewritten or deleted. Two projections are derived from the
 log:
 
 - **Model context**: the system prompt, then the latest `compaction` summary,
-  then every message entry from its first kept entry onward.
+  then every message entry from its first kept entry onward. A tool call
+  left without a result by an interrupted turn is answered with a placeholder
+  here, because providers reject unanswered calls.
 - **Replay**: the full log, mapped to client updates by the transport
   (`acpserver` for ACP). Compactions do not shorten what the user sees.
 
-Streaming deltas are not persisted; an entry is written when its message is
-complete. Listing sessions reads the `meta` entries, not whole histories.
+Streaming deltas are not persisted; an entry is written to the file the
+moment its message is complete, so there is no separate save step. A session
+made with `session.New` has no file and lives only in memory, which is how
+delegated tasks stay ephemeral. A partial last line left by a crash is
+dropped on load.
 
-Existing `<id>.json` sessions are converted once on load.
+Listing sessions scans each log for metadata without decoding message
+bodies.
+
+An existing `<id>.json` session is converted the first time it is listed or
+loaded, and the original is kept as `<id>.json.bak`. Its recorded ACP event
+list is not carried over, so files attached in old sessions no longer appear
+in replay.
 
 ## Events
 
@@ -229,6 +240,7 @@ emits `session_info`.
    build `Agent` from plain options. **Done.**
 2. Replace `EventSink` with `Event` and `Sink`; report real usage. **Done.**
 3. Move sessions to the append-only log with projections; convert old files.
+   **Done.**
 4. Implement compaction and `/compact` on the new session model.
 5. Split the ACP server out of `agent/manager.go` into `runtime/` and
    `acpserver/`; move the CLI to `cmd/miya/`.

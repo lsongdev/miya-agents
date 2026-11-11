@@ -161,11 +161,12 @@ func runCommand(args []string) {
 	}
 
 	if sess == nil {
-		sess = session.New(agentName)
+		if sess, err = session.Create(agentName); err != nil {
+			log.Fatalf("session error: %v", err)
+		}
 	}
 
-	output := &stdoutWriter{}
-	sink := agent.Record(sess, output.Handle)
+	sink := (&stdoutWriter{}).Handle
 	ctx := context.Background()
 	rl := New("> ")
 
@@ -187,20 +188,15 @@ func runCommand(args []string) {
 		if line == "exit" || line == "quit" {
 			return
 		}
-		sess.AppendRequest(line)
-		agent.RecordUserMessage(sess, line)
-		if sess.Title == "" {
-			sess.Title = sess.DisplayTitle()
-			if sess.Title != "" {
-				if err := sink(agent.Event{Type: agent.EventSessionInfo, Title: sess.Title}); err != nil {
-					fmt.Printf("Error: %v\n", err)
-					continue
-				}
-			}
-		}
-		if err := sess.Save(); err != nil {
+		if err := sess.AddUser(line); err != nil {
 			fmt.Printf("Error: %v\n", err)
 			continue
+		}
+		if sess.Title == "" {
+			if err := sess.SetTitle(sess.DisplayTitle()); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				continue
+			}
 		}
 		if err := ag.Run(ctx, sess, sink); err != nil {
 			fmt.Printf("Error: %v\n", err)
@@ -242,8 +238,8 @@ func (w *stdoutWriter) Handle(event agent.Event) error {
 		w.finishThought()
 		w.flush()
 		file := event.File
-		if file.URI != "" {
-			fmt.Printf("\n[file] %s (%s, %d bytes): %s\n", file.Name, file.MimeType, file.Size, file.URI)
+		if file.URL != "" {
+			fmt.Printf("\n[file] %s (%s, %d bytes): %s\n", file.Name, file.MimeType, file.Size, file.URL)
 		} else {
 			fmt.Printf("\n[file] %s (%s, %d bytes, inline)\n", file.Name, file.MimeType, file.Size)
 		}
@@ -310,18 +306,14 @@ func sessionsListCommand() {
 
 	fmt.Printf("Sessions (%d):\n\n", len(sessions))
 	for _, s := range sessions {
-		preview := strings.ReplaceAll(s.FirstUserMessage(), "\n", " ")
-		if len(preview) > 60 {
-			preview = preview[:57] + "..."
-		}
 		created := "?"
 		if !s.CreatedAt.IsZero() {
 			created = s.CreatedAt.Format("2006-01-02 15:04")
 		}
 		fmt.Printf("  %s\n", s.ID)
-		fmt.Printf("    agent=%s  messages=%d  created=%s\n", s.AgentName, len(s.Messages), created)
-		if preview != "" {
-			fmt.Printf("    %s\n", preview)
+		fmt.Printf("    agent=%s  messages=%d  created=%s\n", s.AgentName, s.Messages, created)
+		if s.Title != "" {
+			fmt.Printf("    %s\n", s.Title)
 		}
 		fmt.Println()
 	}

@@ -61,11 +61,14 @@ type ToolResult struct {
 	IsError bool   `json:"is_error,omitempty"`
 }
 
-// Media is inline or referenced binary content. Set Data or URL.
+// Media is binary content, carried inline or by reference. Set Data or URL.
 type Media struct {
+	Name     string `json:"name,omitempty"`
 	MimeType string `json:"mime_type,omitempty"`
-	Data     string `json:"data,omitempty"` // base64
-	URL      string `json:"url,omitempty"`
+	// Size is the content's length in bytes, when known.
+	Size int    `json:"size,omitempty"`
+	Data string `json:"data,omitempty"` // base64
+	URL  string `json:"url,omitempty"`
 }
 
 type Message struct {

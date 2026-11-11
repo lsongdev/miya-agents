@@ -66,13 +66,12 @@ func (m *Manager) UseAgent(name string) (*Agent, error) {
 		return nil, fmt.Errorf("agent %q tools: %w", name, err)
 	}
 	return &Agent{
-		Name:      name,
-		Model:     model,
-		ModelName: profile.ModelName,
-		System:    systemPrompt(profile.GetWorkspace()),
-		MaxTokens: profile.MaxTokens,
-		// 128000 is the documented default of contextWindowTokens.
-		ContextWindow: cmp.Or(profile.ContextWindowTokens, 128000),
+		Name:          name,
+		Model:         model,
+		ModelName:     profile.ModelName,
+		System:        systemPrompt(profile.GetWorkspace()),
+		MaxTokens:     profile.MaxTokens,
+		ContextWindow: m.contextWindow(name),
 		Tools:         agentTools,
 	}, nil
 }
@@ -192,15 +191,15 @@ func (m *Manager) Delegate(ctx context.Context, name, task string) (string, erro
 	}
 
 	sess := session.New(ag.Name)
-	sess.AppendRequest(task)
+	_ = sess.AddUser(task) // an in-memory session cannot fail to add
 	// Fallback output for a run that ends without a final text message.
 	var output strings.Builder
 	capture := func(event Event) error {
 		switch {
 		case event.Type == EventText:
 			output.WriteString(event.Text)
-		case event.Type == EventFile && event.File.URI != "":
-			output.WriteString(event.File.URI)
+		case event.Type == EventFile && event.File.URL != "":
+			output.WriteString(event.File.URL)
 		case event.Type == EventFile:
 			output.WriteString(event.File.Name)
 		}
@@ -210,8 +209,9 @@ func (m *Manager) Delegate(ctx context.Context, name, task string) (string, erro
 	if err := ag.Run(ctx, sess, capture); err != nil {
 		return "", fmt.Errorf("agent %q failed: %w", name, err)
 	}
-	for i := len(sess.Messages) - 1; i >= 0; i-- {
-		message := sess.Messages[i]
+	messages := sess.Context()
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
 		if text := message.Text(); message.Role == llm.RoleAssistant && len(message.ToolCalls()) == 0 && text != "" {
 			return text, nil
 		}
@@ -262,9 +262,9 @@ func (m *Manager) NewSession(ctx context.Context, req *acp.NewSessionRequest, se
 		return nil, err
 	}
 
-	sess := session.New(agentName)
-	if err := sess.Save(); err != nil {
-		return nil, fmt.Errorf("save session: %w", err)
+	sess, err := session.Create(agentName)
+	if err != nil {
+		return nil, fmt.Errorf("create session: %w", err)
 	}
 
 	m.mu.Lock()
@@ -297,12 +297,8 @@ func (m *Manager) Prompt(ctx context.Context, req *acp.PromptRequest, sender acp
 		}
 	}
 	prompt := strings.Join(textParts, "\n")
-	sess.AppendRequest(prompt)
-	RecordUserMessage(sess, prompt)
-	titleChanged := false
-	if sess.Title == "" {
-		sess.Title = sess.DisplayTitle()
-		titleChanged = sess.Title != ""
+	if err := sess.AddUser(prompt); err != nil {
+		return nil, fmt.Errorf("save prompt: %w", err)
 	}
 
 	ag, err := m.UseAgent(agentName)
@@ -310,22 +306,18 @@ func (m *Manager) Prompt(ctx context.Context, req *acp.PromptRequest, sender acp
 		return nil, fmt.Errorf("use agent: %w", err)
 	}
 
-	sink := Record(sess, func(event Event) error {
-		if update, ok := acpUpdate(event); ok {
-			return sender.Send(update)
+	sink := acpSink(sender)
+	if sess.Title == "" {
+		if title := sess.DisplayTitle(); title != "" {
+			if err := sess.SetTitle(title); err != nil {
+				return nil, fmt.Errorf("save title: %w", err)
+			}
+			if err := sink(Event{Type: EventSessionInfo, Title: title}); err != nil {
+				return nil, err
+			}
 		}
-		return nil
-	})
-	if titleChanged {
-		if err := sink(Event{Type: EventSessionInfo, Title: sess.Title}); err != nil {
-			return nil, err
-		}
-	}
-	if err := sess.Save(); err != nil {
-		return nil, fmt.Errorf("save session: %w", err)
 	}
 	if err := ag.Run(ctx, sess, sink); err != nil {
-		_ = sess.Save()
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
 
@@ -337,19 +329,20 @@ func (m *Manager) LoadSession(ctx context.Context, req *acp.LoadSessionRequest, 
 	if err != nil {
 		return nil, fmt.Errorf("load session: %w", err)
 	}
-	if err := replaySession(sess, sender); err != nil {
+	if err := replaySession(sess, m.contextWindow(sess.AgentName), sender); err != nil {
 		return nil, fmt.Errorf("replay session: %w", err)
 	}
 	return &acp.LoadSessionResponse{}, nil
 }
 
-func replaySession(sess *session.Session, sender acp.SessionUpdateSender) error {
-	for _, event := range sess.Events {
-		if err := sender.Send(event.Update); err != nil {
-			return err
-		}
+// contextWindow returns the context size configured for a profile.
+func (m *Manager) contextWindow(profile string) int {
+	// 128000 is the documented default of contextWindowTokens.
+	const fallback = 128000
+	if p, ok := m.config.Profiles[profile]; ok {
+		return cmp.Or(p.ContextWindowTokens, fallback)
 	}
-	return nil
+	return fallback
 }
 
 func (m *Manager) ResumeSession(ctx context.Context, req *acp.ResumeSessionRequest) (*acp.ResumeSessionResponse, error) {
@@ -364,8 +357,7 @@ func (m *Manager) CloseSession(ctx context.Context, req *acp.CloseSessionRequest
 }
 
 func (m *Manager) DeleteSession(ctx context.Context, req *acp.DeleteSessionRequest) (*acp.DeleteSessionResponse, error) {
-	p := filepath.Join(config.ConfigPath, "sessions", string(req.SessionID)+".json")
-	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+	if err := session.Delete(string(req.SessionID)); err != nil {
 		return nil, fmt.Errorf("delete session: %w", err)
 	}
 	return &acp.DeleteSessionResponse{}, nil
@@ -379,7 +371,7 @@ func (m *Manager) ListSessions(ctx context.Context, req *acp.ListSessionsRequest
 	infos := make([]acp.SessionInfo, 0, len(sessions))
 	for _, s := range sessions {
 		var title *string
-		if value := s.DisplayTitle(); value != "" {
+		if value := s.Title; value != "" {
 			title = &value
 		}
 		var updatedAt *string

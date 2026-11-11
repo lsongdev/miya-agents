@@ -1,9 +1,6 @@
 package agent
 
-import (
-	"github.com/lsongdev/miya-agents/llm"
-	"github.com/lsongdev/miya-agents/tools"
-)
+import "github.com/lsongdev/miya-agents/llm"
 
 type EventType string
 
@@ -30,7 +27,7 @@ type Event struct {
 	Type  EventType
 	Text  string
 	Tool  *ToolEvent
-	File  *File
+	File  *llm.Media
 	Usage *llm.Usage
 	// ContextWindow accompanies Usage: the model's context size in tokens,
 	// or zero if unknown.
@@ -44,9 +41,6 @@ type ToolEvent struct {
 	Result string
 	Failed bool
 }
-
-// File is a file handed to the user.
-type File = tools.File
 
 // Sink receives the loop's events in order. Returning an error stops the
 // loop. A sink handles the event types it knows and ignores the rest, so new

@@ -54,45 +54,45 @@ func (t *AttachFileTool) Run(ctx context.Context, args string) string {
 }
 
 // RunFiles implements FileTool.
-func (t *AttachFileTool) RunFiles(ctx context.Context, args string) (string, []File) {
+func (t *AttachFileTool) RunFiles(ctx context.Context, args string) (string, []llm.Media) {
 	file, err := t.attach(args)
 	if err != nil {
 		return "Error: " + err.Error(), nil
 	}
 	if file.Data != "" {
-		return fmt.Sprintf("Attached %s (%s, %d bytes) inline.", file.Name, file.MimeType, file.Size), []File{file}
+		return fmt.Sprintf("Attached %s (%s, %d bytes) inline.", file.Name, file.MimeType, file.Size), []llm.Media{file}
 	}
-	return fmt.Sprintf("Attached %s (%s, %d bytes) as %s.", file.Name, file.MimeType, file.Size, file.URI), []File{file}
+	return fmt.Sprintf("Attached %s (%s, %d bytes) as %s.", file.Name, file.MimeType, file.Size, file.URL), []llm.Media{file}
 }
 
-func (t *AttachFileTool) attach(args string) (File, error) {
+func (t *AttachFileTool) attach(args string) (llm.Media, error) {
 	var input struct {
 		Path           string `json:"path"`
 		MimeType       string `json:"mimeType,omitempty"`
 		MaxInlineBytes int    `json:"maxInlineBytes,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
-		return File{}, fmt.Errorf("failed to parse arguments: %v", err)
+		return llm.Media{}, fmt.Errorf("failed to parse arguments: %v", err)
 	}
 	if strings.TrimSpace(input.Path) == "" {
-		return File{}, errors.New("path is required")
+		return llm.Media{}, errors.New("path is required")
 	}
 
 	path := fileResolvePath(input.Path, t.Workspace)
 	resolvedPath := fileAbsPath(path)
 	if t.Workspace != "" && !isPathWithinWorkspace(resolvedPath, t.Workspace) {
-		return File{}, fmt.Errorf("file %q is outside workspace %q", resolvedPath, t.Workspace)
+		return llm.Media{}, fmt.Errorf("file %q is outside workspace %q", resolvedPath, t.Workspace)
 	}
 
 	info, err := os.Stat(resolvedPath)
 	if err != nil {
-		return File{}, fmt.Errorf("failed to stat file: %s: %v", fileFormatPath(input.Path, resolvedPath), err)
+		return llm.Media{}, fmt.Errorf("failed to stat file: %s: %v", fileFormatPath(input.Path, resolvedPath), err)
 	}
 	if info.IsDir() {
-		return File{}, fmt.Errorf("path is a directory, not a file: %s", fileFormatPath(input.Path, resolvedPath))
+		return llm.Media{}, fmt.Errorf("path is a directory, not a file: %s", fileFormatPath(input.Path, resolvedPath))
 	}
 	if info.Size() > int64(^uint(0)>>1) {
-		return File{}, fmt.Errorf("file is too large to attach: %s", fileFormatPath(input.Path, resolvedPath))
+		return llm.Media{}, fmt.Errorf("file is too large to attach: %s", fileFormatPath(input.Path, resolvedPath))
 	}
 
 	maxInline := input.MaxInlineBytes
@@ -110,16 +110,16 @@ func (t *AttachFileTool) attach(args string) (File, error) {
 		mimeType = "application/octet-stream"
 	}
 
-	file := File{
+	file := llm.Media{
 		Name:     filepath.Base(resolvedPath),
 		MimeType: mimeType,
 		Size:     int(info.Size()),
-		URI:      fileURI(resolvedPath),
+		URL:      fileURI(resolvedPath),
 	}
 	if file.Size <= maxInline {
 		data, err := os.ReadFile(resolvedPath)
 		if err != nil {
-			return File{}, fmt.Errorf("failed to read file: %s: %v", fileFormatPath(input.Path, resolvedPath), err)
+			return llm.Media{}, fmt.Errorf("failed to read file: %s: %v", fileFormatPath(input.Path, resolvedPath), err)
 		}
 		file.Data = base64.StdEncoding.EncodeToString(data)
 	}

@@ -47,41 +47,46 @@ func (a *Agent) toolDefs() []llm.ToolDef {
 	return defs
 }
 
-// Run advances sess until the agent finishes its turn. Persistence is owned by
-// the caller; the same loop can therefore run persistent user sessions or
-// ephemeral delegated tasks.
+// Run advances sess until the agent finishes its turn, adding each message
+// to it as it completes. Whether that persists is the session's concern: the
+// same loop runs file-backed user sessions and in-memory delegated tasks.
 func (a *Agent) Run(ctx context.Context, sess *session.Session, sink Sink) error {
 	if a.Model == nil {
 		return fmt.Errorf("agent has no model")
 	}
 	for {
-		response, err := a.respond(ctx, sess, sink)
+		response, usage, err := a.respond(ctx, sess, sink)
 		if err != nil {
 			return err
 		}
-		sess.Append(response)
+		if err := sess.Add(session.Entry{Message: &response, Usage: usage}); err != nil {
+			return err
+		}
 
 		calls := response.ToolCalls()
 		if len(calls) == 0 {
 			return sink(Event{Type: EventDone})
 		}
 		for _, call := range calls {
-			result, err := a.call(ctx, call, sink)
+			result, files, err := a.call(ctx, call, sink)
 			if err != nil {
 				return err
 			}
-			sess.Append(llm.ToolResultMessage(result))
+			message := llm.ToolResultMessage(result)
+			if err := sess.Add(session.Entry{Message: &message, Files: files}); err != nil {
+				return err
+			}
 		}
 	}
 }
 
-// respond makes one model call and returns the complete assistant message,
-// forwarding text and thinking to sink as they arrive.
-func (a *Agent) respond(ctx context.Context, sess *session.Session, sink Sink) (llm.Message, error) {
+// respond makes one model call and returns the complete assistant message
+// and its token usage, forwarding text and thinking to sink as they arrive.
+func (a *Agent) respond(ctx context.Context, sess *session.Session, sink Sink) (llm.Message, *llm.Usage, error) {
 	req := &llm.Request{
 		Model:     a.ModelName,
 		System:    a.System,
-		Messages:  sess.Messages,
+		Messages:  sess.Context(),
 		Tools:     a.toolDefs(),
 		MaxTokens: a.MaxTokens,
 	}
@@ -89,50 +94,51 @@ func (a *Agent) respond(ctx context.Context, sess *session.Session, sink Sink) (
 	received := false
 	for delta, err := range a.Model.Stream(ctx, req) {
 		if err != nil {
-			return llm.Message{}, fmt.Errorf("model stream: %w", err)
+			return llm.Message{}, nil, fmt.Errorf("model stream: %w", err)
 		}
 		received = true
 		builder.Add(delta)
 		if delta.Thinking != "" {
 			if err := sink(Event{Type: EventThought, Text: delta.Thinking}); err != nil {
-				return llm.Message{}, err
+				return llm.Message{}, nil, err
 			}
 		}
 		if delta.Text != "" {
 			if err := sink(Event{Type: EventText, Text: delta.Text}); err != nil {
-				return llm.Message{}, err
+				return llm.Message{}, nil, err
 			}
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return llm.Message{}, err
+		return llm.Message{}, nil, err
 	}
 	if !received {
-		return llm.Message{}, fmt.Errorf("model stream closed without a response")
+		return llm.Message{}, nil, fmt.Errorf("model stream closed without a response")
 	}
 	response := builder.Message()
 	for _, call := range response.ToolCalls() {
 		if call.ID == "" {
-			return llm.Message{}, fmt.Errorf("tool call %q is missing an id", call.Name)
+			return llm.Message{}, nil, fmt.Errorf("tool call %q is missing an id", call.Name)
 		}
 	}
 	if builder.Usage != nil {
 		if err := sink(Event{Type: EventUsage, Usage: builder.Usage, ContextWindow: a.ContextWindow}); err != nil {
-			return llm.Message{}, err
+			return llm.Message{}, nil, err
 		}
 	}
-	return response, nil
+	return response, builder.Usage, nil
 }
 
-// call runs one tool call and reports it to sink. A tool failure is returned
-// to the model as the result; only a sink failure is returned as an error.
-func (a *Agent) call(ctx context.Context, call llm.ToolCall, sink Sink) (llm.ToolResult, error) {
+// call runs one tool call and reports it to sink, returning the result for
+// the model and any files for the user. A tool failure is returned to the
+// model as the result; only a sink failure is returned as an error.
+func (a *Agent) call(ctx context.Context, call llm.ToolCall, sink Sink) (llm.ToolResult, []llm.Media, error) {
 	if err := sink(Event{Type: EventToolStart, Tool: &ToolEvent{Call: call}}); err != nil {
-		return llm.ToolResult{}, err
+		return llm.ToolResult{}, nil, err
 	}
 
 	result := llm.ToolResult{ID: call.ID, Name: call.Name}
-	var files []File
+	var files []llm.Media
 	switch tool := a.tool(call.Name).(type) {
 	case tools.FileTool:
 		result.Content, files = tool.RunFiles(ctx, call.Arguments)
@@ -145,12 +151,12 @@ func (a *Agent) call(ctx context.Context, call llm.ToolCall, sink Sink) (llm.Too
 
 	for _, file := range files {
 		if err := sink(Event{Type: EventFile, File: &file}); err != nil {
-			return llm.ToolResult{}, err
+			return llm.ToolResult{}, nil, err
 		}
 	}
 	done := &ToolEvent{Call: call, Result: result.Content, Failed: result.IsError}
 	if err := sink(Event{Type: EventToolDone, Tool: done}); err != nil {
-		return llm.ToolResult{}, err
+		return llm.ToolResult{}, nil, err
 	}
-	return result, nil
+	return result, files, nil
 }

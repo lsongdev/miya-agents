@@ -1,53 +1,300 @@
+// Package session stores a conversation as an append-only log of typed
+// entries. Entries are never rewritten or deleted; what the model sees and
+// what a client replays are both views derived from the same log.
 package session
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
-	"github.com/lsongdev/miya-agents/acp"
-	"github.com/lsongdev/miya-agents/config"
 	"github.com/lsongdev/miya-agents/llm"
 )
 
-type Event struct {
-	ID        string            `json:"id"`
-	CreatedAt time.Time         `json:"created_at"`
-	Update    acp.SessionUpdate `json:"update"`
+type EntryType string
+
+const (
+	// EntryMeta sets session metadata. A later meta entry overrides the
+	// fields it sets.
+	EntryMeta EntryType = "meta"
+	// EntryMessage is one complete user, assistant or tool message.
+	EntryMessage EntryType = "message"
+)
+
+// Entry is one line of the log. Type selects which of the payload fields is
+// set.
+type Entry struct {
+	// ID is the entry's position in the log, starting at 1.
+	ID   int       `json:"id"`
+	Type EntryType `json:"type"`
+	Time time.Time `json:"time"`
+
+	Meta    *Meta        `json:"meta,omitempty"`
+	Message *llm.Message `json:"message,omitempty"`
+	// Usage is the token usage of the model call that produced an assistant
+	// message.
+	Usage *llm.Usage `json:"usage,omitempty"`
+	// Files are the files a tool handed to the user, recorded with its
+	// result message. The model does not see them.
+	Files []llm.Media `json:"files,omitempty"`
 }
 
-type Compaction struct {
-	ID           string    `json:"id"`
-	CreatedAt    time.Time `json:"created_at"`
-	MessageStart int       `json:"message_start"`
-	MessageEnd   int       `json:"message_end"`
-	KeepRecent   int       `json:"keep_recent"`
-	Summary      string    `json:"summary"`
+// Meta is session metadata. Empty fields leave the current value unchanged.
+type Meta struct {
+	AgentName string `json:"agent_name,omitempty"`
+	Title     string `json:"title,omitempty"`
 }
 
+// Session is a conversation log, held in memory and, when it has a backing
+// file, written through on every Add.
 type Session struct {
-	ID          string        `json:"id"`
-	AgentName   string        `json:"agent_name"`
-	Title       string        `json:"title,omitempty"`
-	Summary     string        `json:"summary,omitempty"`
-	CreatedAt   time.Time     `json:"created_at"`
-	UpdatedAt   time.Time     `json:"updated_at,omitempty"`
-	Messages    []llm.Message `json:"messages"`
-	Events      []Event       `json:"events"`
-	Compactions []Compaction  `json:"compactions"`
+	ID        string
+	AgentName string
+	Title     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Entries   []Entry
+
+	// path is the backing file, or empty for a session that lives only in
+	// memory.
+	path string
 }
 
-func sessionsDir() string {
-	return filepath.Join(config.ConfigPath, "sessions")
+// New returns a session that lives only in memory, for work that should leave
+// no trace, such as a delegated task.
+func New(agentName string) *Session {
+	s := &Session{ID: newUUID()}
+	_ = s.Add(Entry{Meta: &Meta{AgentName: agentName}}) // cannot fail without a file
+	return s
 }
 
-func sessionPath(id string) string {
-	return filepath.Join(sessionsDir(), id+".json")
+// Create returns a new session backed by a file in the sessions directory.
+func Create(agentName string) (*Session, error) {
+	s := &Session{ID: newUUID()}
+	s.path = sessionPath(s.ID)
+	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
+		return nil, fmt.Errorf("create session directory: %w", err)
+	}
+	if err := s.Add(Entry{Meta: &Meta{AgentName: agentName}}); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// Load reads the session with the given id from the sessions directory.
+func Load(id string) (*Session, error) {
+	path := sessionPath(id)
+	if err := migrateLegacy(id); err != nil {
+		return nil, fmt.Errorf("convert session %s: %w", id, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read session %s: %w", id, err)
+	}
+	s := &Session{ID: id, path: path}
+	valid, err := eachLine(data, func(line []byte) error {
+		var entry Entry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			return err
+		}
+		s.Entries = append(s.Entries, entry)
+		s.apply(entry)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("parse session %s: %w", id, err)
+	}
+	// A crash can leave a partial last line. Drop it so the next entry
+	// starts on a line of its own.
+	if valid < len(data) {
+		if err := os.Truncate(path, int64(valid)); err != nil {
+			return nil, fmt.Errorf("repair session %s: %w", id, err)
+		}
+	}
+	return s, nil
+}
+
+// eachLine calls fn for every non-empty line of a log. It returns the length
+// of the prefix that parsed. Only an unterminated last line may fail to
+// parse, which is what an interrupted write leaves behind; a bad line
+// anywhere else is an error.
+func eachLine(data []byte, fn func(line []byte) error) (int, error) {
+	offset := 0
+	for offset < len(data) {
+		end := bytes.IndexByte(data[offset:], '\n')
+		terminated := end >= 0
+		if !terminated {
+			end = len(data) - offset
+		}
+		line := bytes.TrimSpace(data[offset : offset+end])
+		if len(line) > 0 {
+			if err := fn(line); err != nil {
+				if !terminated {
+					return offset, nil
+				}
+				return offset, err
+			}
+		}
+		offset += end
+		if terminated {
+			offset++
+		}
+	}
+	return offset, nil
+}
+
+// Add appends an entry to the log, writing it to the backing file first when
+// there is one. ID and Time are assigned here; Type is inferred from the
+// payload when left empty.
+func (s *Session) Add(entry Entry) error {
+	if entry.Type == "" {
+		switch {
+		case entry.Message != nil:
+			entry.Type = EntryMessage
+		case entry.Meta != nil:
+			entry.Type = EntryMeta
+		default:
+			return errors.New("session entry has no payload")
+		}
+	}
+	entry.ID = len(s.Entries) + 1
+	if entry.Time.IsZero() {
+		entry.Time = time.Now()
+	}
+	if s.path != "" {
+		line, err := json.Marshal(entry)
+		if err != nil {
+			return fmt.Errorf("encode session entry: %w", err)
+		}
+		if err := appendLine(s.path, line); err != nil {
+			return fmt.Errorf("write session %s: %w", s.ID, err)
+		}
+	}
+	s.Entries = append(s.Entries, entry)
+	s.apply(entry)
+	return nil
+}
+
+func appendLine(path string, line []byte) error {
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(append(line, '\n')); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+// apply folds an entry into the session's derived fields.
+func (s *Session) apply(entry Entry) {
+	if s.CreatedAt.IsZero() {
+		s.CreatedAt = entry.Time
+	}
+	s.UpdatedAt = entry.Time
+	if meta := entry.Meta; meta != nil {
+		if meta.AgentName != "" {
+			s.AgentName = meta.AgentName
+		}
+		if meta.Title != "" {
+			s.Title = meta.Title
+		}
+	}
+}
+
+// AddMessage appends messages to the log.
+func (s *Session) AddMessage(messages ...llm.Message) error {
+	for _, message := range messages {
+		if err := s.Add(Entry{Message: &message}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// AddUser appends a user text message.
+func (s *Session) AddUser(text string) error {
+	return s.AddMessage(llm.UserText(text))
+}
+
+// SetTitle records a new title.
+func (s *Session) SetTitle(title string) error {
+	return s.Add(Entry{Meta: &Meta{Title: title}})
+}
+
+// Context is the view of the log sent to the model: its messages, in order.
+//
+// A turn can be cut short between a tool call and its result, by a crash or
+// a cancelled request. Providers reject a call with no result, so each one
+// is answered here with a placeholder. The log itself is left as it is.
+func (s *Session) Context() []llm.Message {
+	var messages []llm.Message
+	var pending []llm.ToolCall // calls of the last assistant message still unanswered
+	closePending := func() {
+		for _, call := range pending {
+			messages = append(messages, llm.ToolResultMessage(llm.ToolResult{
+				ID:      call.ID,
+				Name:    call.Name,
+				Content: "Error: the tool call was interrupted before it produced a result.",
+				IsError: true,
+			}))
+		}
+		pending = nil
+	}
+	for _, entry := range s.Entries {
+		message := entry.Message
+		if message == nil {
+			continue
+		}
+		if message.Role == llm.RoleTool {
+			for _, block := range message.Content {
+				if block.ToolResult != nil {
+					pending = slices.DeleteFunc(pending, func(call llm.ToolCall) bool {
+						return call.ID == block.ToolResult.ID
+					})
+				}
+			}
+		} else {
+			closePending()
+		}
+		messages = append(messages, *message)
+		if message.Role == llm.RoleAssistant {
+			pending = message.ToolCalls()
+		}
+	}
+	closePending()
+	return messages
+}
+
+// DisplayTitle returns the title, falling back to the start of the first
+// user message.
+func (s *Session) DisplayTitle() string {
+	if title := strings.TrimSpace(s.Title); title != "" {
+		return title
+	}
+	for _, entry := range s.Entries {
+		if entry.Message != nil && entry.Message.Role == llm.RoleUser {
+			return titleFrom(entry.Message.Text())
+		}
+	}
+	return ""
+}
+
+// titleFrom shortens text to a single-line title.
+func titleFrom(text string) string {
+	title := strings.Join(strings.Fields(text), " ")
+	if runes := []rune(title); len(runes) > 64 {
+		title = string(runes[:61]) + "..."
+	}
+	return title
 }
 
 // newUUID returns a RFC 4122 v4 UUID string.
@@ -60,186 +307,4 @@ func newUUID() string {
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
-}
-
-// New creates a new session with a generated UUID for the given agent.
-func New(agentName string) *Session {
-	return &Session{
-		ID:        newUUID(),
-		AgentName: agentName,
-		CreatedAt: time.Now(),
-		Messages:  []llm.Message{},
-		Events:    []Event{},
-	}
-}
-
-// Load reads the session with the given id from disk.
-func Load(id string) (*Session, error) {
-	data, err := os.ReadFile(sessionPath(id))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read session %s: %w", id, err)
-	}
-	var s Session
-	// Messages are decoded separately so that files written before the llm
-	// message format are still readable.
-	file := struct {
-		*Session
-		Messages []json.RawMessage `json:"messages"`
-	}{Session: &s}
-	if err := json.Unmarshal(data, &file); err != nil {
-		return nil, fmt.Errorf("failed to parse session %s: %w", id, err)
-	}
-	if s.Messages, err = decodeMessages(file.Messages); err != nil {
-		return nil, fmt.Errorf("failed to parse session %s: %w", id, err)
-	}
-	if s.ID == "" {
-		s.ID = id
-	}
-	if s.Messages == nil {
-		s.Messages = []llm.Message{}
-	}
-	if s.Events == nil {
-		s.Events = []Event{}
-	}
-	if s.Compactions == nil {
-		s.Compactions = []Compaction{}
-	}
-	return &s, nil
-}
-
-// List returns all sessions on disk, sorted by file mtime descending (newest first).
-func List() ([]*Session, error) {
-	dir := sessionsDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	type entryInfo struct {
-		session *Session
-		mtime   time.Time
-	}
-	infos := make([]entryInfo, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
-			continue
-		}
-		id := e.Name()[:len(e.Name())-len(".json")]
-		s, err := Load(id)
-		if err != nil {
-			continue
-		}
-		fi, err := e.Info()
-		if err != nil {
-			continue
-		}
-		infos = append(infos, entryInfo{session: s, mtime: fi.ModTime()})
-	}
-
-	sort.Slice(infos, func(i, j int) bool {
-		return infos[i].mtime.After(infos[j].mtime)
-	})
-
-	out := make([]*Session, len(infos))
-	for i, info := range infos {
-		out[i] = info.session
-	}
-	return out, nil
-}
-
-// Latest returns the most recently modified session, or nil if none exist.
-func Latest() (*Session, error) {
-	sessions, err := List()
-	if err != nil {
-		return nil, err
-	}
-	if len(sessions) == 0 {
-		return nil, nil
-	}
-	return sessions[0], nil
-}
-
-// AppendRequest appends a user text message.
-func (s *Session) AppendRequest(request string) {
-	s.Messages = append(s.Messages, llm.UserText(request))
-}
-
-// Append appends messages to the model context.
-func (s *Session) Append(messages ...llm.Message) {
-	s.Messages = append(s.Messages, messages...)
-}
-
-func (s *Session) AppendEvent(update acp.SessionUpdate) {
-	s.Events = append(s.Events, Event{
-		ID:        fmt.Sprintf("evt_%06d", len(s.Events)+1),
-		CreatedAt: time.Now(),
-		Update:    update,
-	})
-}
-
-// SaveMessages writes the session (including metadata) to disk.
-// Name kept for backwards compatibility with the agent loop.
-func (s *Session) SaveMessages() {
-	if err := s.Save(); err != nil {
-		fmt.Printf("Error saving session: %v\n", err)
-	}
-}
-
-// Save writes the session to disk and returns any error.
-func (s *Session) Save() error {
-	if s.ID == "" {
-		s.ID = newUUID()
-	}
-	if s.CreatedAt.IsZero() {
-		s.CreatedAt = time.Now()
-	}
-	if s.Messages == nil {
-		s.Messages = []llm.Message{}
-	}
-	if s.Events == nil {
-		s.Events = []Event{}
-	}
-	if s.Compactions == nil {
-		s.Compactions = []Compaction{}
-	}
-	s.UpdatedAt = time.Now()
-	path := sessionPath(s.ID)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("failed to create session directory: %w", err)
-	}
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal session: %w", err)
-	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write session file: %w", err)
-	}
-	return nil
-}
-
-// FirstUserMessage returns the first user message content, useful for previews.
-func (s *Session) FirstUserMessage() string {
-	for _, m := range s.Messages {
-		if m.Role == llm.RoleUser {
-			return m.Text()
-		}
-	}
-	return ""
-}
-
-func (s *Session) DisplayTitle() string {
-	if title := strings.TrimSpace(s.Title); title != "" {
-		return title
-	}
-	title := strings.Join(strings.Fields(s.FirstUserMessage()), " ")
-	if title == "" {
-		return ""
-	}
-	if len(title) > 64 {
-		title = title[:61] + "..."
-	}
-	return title
 }

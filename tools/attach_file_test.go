@@ -25,8 +25,8 @@ func TestAttachFileToolInlinesSmallFile(t *testing.T) {
 	if file.Name != "hello.txt" || file.Size != 5 || file.Data != "aGVsbG8=" {
 		t.Fatalf("file = %#v", file)
 	}
-	if !strings.HasPrefix(file.URI, "file://") {
-		t.Fatalf("uri = %q", file.URI)
+	if !strings.HasPrefix(file.URL, "file://") {
+		t.Fatalf("uri = %q", file.URL)
 	}
 	if file.MimeType != "text/plain; charset=utf-8" && file.MimeType != "text/plain" {
 		t.Fatalf("mime = %q", file.MimeType)
@@ -50,8 +50,8 @@ func TestAttachFileToolLinksLargeFile(t *testing.T) {
 	if len(files) != 1 || files[0].Data != "" {
 		t.Fatalf("large file should be linked, not inlined: %#v", files)
 	}
-	if !strings.HasPrefix(files[0].URI, "file://") || !strings.Contains(text, files[0].URI) {
-		t.Fatalf("uri = %q, text = %q", files[0].URI, text)
+	if !strings.HasPrefix(files[0].URL, "file://") || !strings.Contains(text, files[0].URL) {
+		t.Fatalf("uri = %q, text = %q", files[0].URL, text)
 	}
 }
 
