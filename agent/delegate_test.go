@@ -38,14 +38,14 @@ func TestUseAgentSelectsProfileTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UseAgent: %v", err)
 	}
-	if _, ok := ag.tool("web_search"); !ok {
+	if ag.tool("web_search") == nil {
 		t.Fatal("web_search not configured")
 	}
-	delegate, ok := ag.tool("delegate")
-	if !ok {
+	delegate := ag.tool("delegate")
+	if delegate == nil {
 		t.Fatal("delegate not configured")
 	}
-	if _, ok := ag.tool("exec"); ok {
+	if ag.tool("exec") != nil {
 		t.Fatal("exec should not be configured")
 	}
 

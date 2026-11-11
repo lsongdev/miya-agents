@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,23 +16,24 @@ func TestAttachFileToolInlinesSmallFile(t *testing.T) {
 	}
 	tool := &AttachFileTool{Workspace: workspace, MaxInline: 100}
 
-	got := tool.Run(context.Background(), `{"path":"hello.txt"}`)
+	text, files := tool.RunFiles(context.Background(), `{"path":"hello.txt"}`)
 
-	var result AttachFileResult
-	if err := json.Unmarshal([]byte(got), &result); err != nil {
-		t.Fatalf("result is not JSON: %s", got)
+	if len(files) != 1 {
+		t.Fatalf("files = %d, text = %q", len(files), text)
 	}
-	if result.Type != AttachFileEventType {
-		t.Fatalf("type = %q", result.Type)
+	file := files[0]
+	if file.Name != "hello.txt" || file.Size != 5 || file.Data != "aGVsbG8=" {
+		t.Fatalf("file = %#v", file)
 	}
-	if result.Data == "" {
-		t.Fatal("missing inline data")
+	if !strings.HasPrefix(file.URI, "file://") {
+		t.Fatalf("uri = %q", file.URI)
 	}
-	if !strings.HasPrefix(result.URI, "file://") {
-		t.Fatalf("uri = %q", result.URI)
+	if file.MimeType != "text/plain; charset=utf-8" && file.MimeType != "text/plain" {
+		t.Fatalf("mime = %q", file.MimeType)
 	}
-	if result.MimeType != "text/plain; charset=utf-8" && result.MimeType != "text/plain" {
-		t.Fatalf("mime = %q", result.MimeType)
+	// The model sees a description, never the file's bytes.
+	if !strings.Contains(text, "Attached hello.txt") || strings.Contains(text, file.Data) {
+		t.Fatalf("text = %q", text)
 	}
 }
 
@@ -45,17 +45,13 @@ func TestAttachFileToolLinksLargeFile(t *testing.T) {
 	}
 	tool := &AttachFileTool{Workspace: workspace, MaxInline: 5}
 
-	got := tool.Run(context.Background(), `{"path":"large.bin"}`)
+	text, files := tool.RunFiles(context.Background(), `{"path":"large.bin"}`)
 
-	var result AttachFileResult
-	if err := json.Unmarshal([]byte(got), &result); err != nil {
-		t.Fatalf("result is not JSON: %s", got)
+	if len(files) != 1 || files[0].Data != "" {
+		t.Fatalf("large file should be linked, not inlined: %#v", files)
 	}
-	if result.Data != "" {
-		t.Fatal("large file should not be inlined")
-	}
-	if !strings.HasPrefix(result.URI, "file://") {
-		t.Fatalf("uri = %q", result.URI)
+	if !strings.HasPrefix(files[0].URI, "file://") || !strings.Contains(text, files[0].URI) {
+		t.Fatalf("uri = %q, text = %q", files[0].URI, text)
 	}
 }
 

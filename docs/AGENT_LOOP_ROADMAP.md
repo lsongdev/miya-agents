@@ -1,6 +1,6 @@
 # Agent Loop Roadmap
 
-Status: target design; step 1 of [Order of Work](#order-of-work) is implemented
+Status: target design; steps 1 and 2 of [Order of Work](#order-of-work) are implemented
 
 Updated: 2026-11-11
 
@@ -14,8 +14,8 @@ superseded here (see [Superseded Decisions](#superseded-decisions)).
 
 - `llm` holds the neutral message, request and stream types, with one adapter
   per SDK. `agent.Agent` is built from plain fields and calls an `llm.Model`.
-- `agent.Agent.Run` drives the loop and reports through the 8-method
-  `EventSink` interface.
+- `agent.Agent.Run` drives the loop and reports `Event` values to a `Sink`
+  function, including real token usage after each model call.
 - A session is one JSON file holding mutable `messages` (`[]llm.Message`) for
   the model and append-only `events` (as `acp.SessionUpdate`) for UI replay.
   Every save rewrites the whole file. Files written with OpenAI-shaped
@@ -42,9 +42,9 @@ superseded here (see [Superseded Decisions](#superseded-decisions)).
    call from its result, and depends on the model noticing a notice. The
    notice is a mid-conversation system message, which Anthropic Messages does
    not accept and which invalidates prompt caching.
-5. **`EventSink` grows by breaking implementers.** Each new event type changes
-   four implementations. `attach_file` is special-cased by tool name inside
-   the loop, and `UsageEvent` carries nothing.
+5. **`EventSink` grew by breaking implementers.** Each new event type changed
+   four implementations, `attach_file` was special-cased by tool name inside
+   the loop, and `UsageEvent` carried nothing. *Fixed by step 2.*
 
 ## Target Layering
 
@@ -168,9 +168,10 @@ type Sink func(Event) error
 ```
 
 A sink handles the types it cares about and ignores the rest, so adding a
-type (plan, permission request) breaks nobody. Tools return a structured
-result (`Content` plus `Attachments`), and the loop turns attachments into
-`file` events without knowing any tool by name.
+type (plan, permission request) breaks nobody. A tool that produces files
+implements `FileTool` (`RunFiles` returns text for the model plus files for
+the user), and the loop turns those into `file` events without knowing any
+tool by name. Plain tools keep returning a string.
 
 ## Context Compaction
 
@@ -226,7 +227,7 @@ emits `session_info`.
 
 1. Add `llm` types and the two SDK adapters; move `Tool` out of `openai/`;
    build `Agent` from plain options. **Done.**
-2. Replace `EventSink` with `Event` and `Sink`; report real usage.
+2. Replace `EventSink` with `Event` and `Sink`; report real usage. **Done.**
 3. Move sessions to the append-only log with projections; convert old files.
 4. Implement compaction and `/compact` on the new session model.
 5. Split the ACP server out of `agent/manager.go` into `runtime/` and

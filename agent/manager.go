@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -70,7 +71,9 @@ func (m *Manager) UseAgent(name string) (*Agent, error) {
 		ModelName: profile.ModelName,
 		System:    systemPrompt(profile.GetWorkspace()),
 		MaxTokens: profile.MaxTokens,
-		Tools:     agentTools,
+		// 128000 is the documented default of contextWindowTokens.
+		ContextWindow: cmp.Or(profile.ContextWindowTokens, 128000),
+		Tools:         agentTools,
 	}, nil
 }
 
@@ -176,32 +179,6 @@ func (m *Manager) resolveAgentName(name string) (string, error) {
 	return m.defaultAgentName()
 }
 
-type captureWriter struct {
-	sb strings.Builder
-}
-
-func (w *captureWriter) AssistantDelta(text string) error { w.sb.WriteString(text); return nil }
-func (w *captureWriter) AssistantFile(event FileEvent) error {
-	if event.URI != "" {
-		w.sb.WriteString(event.URI)
-		return nil
-	}
-	if event.Name != "" {
-		w.sb.WriteString(event.Name)
-	}
-	return nil
-}
-func (w *captureWriter) ThoughtDelta(text string) error { return nil }
-func (w *captureWriter) ToolCallStart(event ToolCallEvent) error {
-	return nil
-}
-func (w *captureWriter) ToolCallDone(event ToolCallEvent) error {
-	return nil
-}
-func (w *captureWriter) SessionInfo(event SessionInfoEvent) error { return nil }
-func (w *captureWriter) Usage(event UsageEvent) error             { return nil }
-func (w *captureWriter) Done() error                              { return nil }
-
 // Delegate runs an agent with an isolated, in-memory session and returns only
 // its final output. Delegated agents are otherwise normal profile-backed agents.
 func (m *Manager) Delegate(ctx context.Context, name, task string) (string, error) {
@@ -216,9 +193,21 @@ func (m *Manager) Delegate(ctx context.Context, name, task string) (string, erro
 
 	sess := session.New(ag.Name)
 	sess.AppendRequest(task)
-	writer := &captureWriter{}
+	// Fallback output for a run that ends without a final text message.
+	var output strings.Builder
+	capture := func(event Event) error {
+		switch {
+		case event.Type == EventText:
+			output.WriteString(event.Text)
+		case event.Type == EventFile && event.File.URI != "":
+			output.WriteString(event.File.URI)
+		case event.Type == EventFile:
+			output.WriteString(event.File.Name)
+		}
+		return nil
+	}
 	ctx = context.WithValue(ctx, delegateDepthKey{}, depth+1)
-	if err := ag.Run(ctx, sess, writer); err != nil {
+	if err := ag.Run(ctx, sess, capture); err != nil {
 		return "", fmt.Errorf("agent %q failed: %w", name, err)
 	}
 	for i := len(sess.Messages) - 1; i >= 0; i-- {
@@ -227,7 +216,7 @@ func (m *Manager) Delegate(ctx context.Context, name, task string) (string, erro
 			return text, nil
 		}
 	}
-	return writer.sb.String(), nil
+	return output.String(), nil
 }
 
 // acp.ServerHandler implementation
@@ -321,9 +310,14 @@ func (m *Manager) Prompt(ctx context.Context, req *acp.PromptRequest, sender acp
 		return nil, fmt.Errorf("use agent: %w", err)
 	}
 
-	sink := NewRecordingSink(sess, &acpSink{sessionID: req.SessionID, sender: sender})
+	sink := Record(sess, func(event Event) error {
+		if update, ok := acpUpdate(event); ok {
+			return sender.Send(update)
+		}
+		return nil
+	})
 	if titleChanged {
-		if err := sink.SessionInfo(SessionInfoEvent{Title: sess.Title}); err != nil {
+		if err := sink(Event{Type: EventSessionInfo, Title: sess.Title}); err != nil {
 			return nil, err
 		}
 	}
@@ -336,52 +330,6 @@ func (m *Manager) Prompt(ctx context.Context, req *acp.PromptRequest, sender acp
 	}
 
 	return &acp.PromptResponse{StopReason: acp.StopEndTurn}, nil
-}
-
-type acpSink struct {
-	sessionID acp.SessionID
-	sender    acp.SessionUpdateSender
-}
-
-func (s *acpSink) AssistantDelta(text string) error {
-	if text == "" {
-		return nil
-	}
-	return s.sender.Send(assistantMessageUpdate(text))
-}
-
-func (s *acpSink) AssistantFile(event FileEvent) error {
-	return s.sender.Send(fileMessageUpdate(event))
-}
-
-func (s *acpSink) ThoughtDelta(text string) error {
-	if text == "" {
-		return nil
-	}
-	return s.sender.Send(thoughtUpdate(text))
-}
-
-func (s *acpSink) ToolCallStart(event ToolCallEvent) error {
-	return s.sender.Send(toolCallUpdate(event))
-}
-
-func (s *acpSink) ToolCallDone(event ToolCallEvent) error {
-	return s.sender.Send(toolCallDoneUpdate(event))
-}
-
-func (s *acpSink) SessionInfo(event SessionInfoEvent) error {
-	if event.Title == "" {
-		return nil
-	}
-	return s.sender.Send(sessionInfoUpdate(event))
-}
-
-func (s *acpSink) Usage(event UsageEvent) error {
-	return s.sender.Send(usageUpdate(event))
-}
-
-func (s *acpSink) Done() error {
-	return nil
 }
 
 func (m *Manager) LoadSession(ctx context.Context, req *acp.LoadSessionRequest, sender acp.SessionUpdateSender) (*acp.LoadSessionResponse, error) {

@@ -8,13 +8,20 @@ import (
 	"github.com/lsongdev/miya-agents/session"
 )
 
-type recordingSink struct {
-	sess *session.Session
-	next EventSink
-}
-
-func NewRecordingSink(sess *session.Session, next EventSink) EventSink {
-	return &recordingSink{sess: sess, next: next}
+// Record returns a Sink that appends each event to sess's replay log before
+// passing it to next, and saves sess when the turn is done.
+func Record(sess *session.Session, next Sink) Sink {
+	return func(event Event) error {
+		if update, ok := acpUpdate(event); ok {
+			sess.AppendEvent(update)
+		}
+		if event.Type == EventDone {
+			if err := sess.Save(); err != nil {
+				return err
+			}
+		}
+		return next(event)
+	}
 }
 
 func RecordUserMessage(sess *session.Session, text string) {
@@ -24,56 +31,34 @@ func RecordUserMessage(sess *session.Session, text string) {
 	sess.AppendEvent(userMessageUpdate(text))
 }
 
-func (s *recordingSink) AssistantDelta(text string) error {
-	if text == "" {
-		return nil
+// acpUpdate maps an event to the ACP session update that represents it. It
+// reports false for events with no ACP counterpart.
+func acpUpdate(event Event) (acp.SessionUpdate, bool) {
+	switch event.Type {
+	case EventText:
+		return assistantMessageUpdate(event.Text), event.Text != ""
+	case EventThought:
+		return thoughtUpdate(event.Text), event.Text != ""
+	case EventToolStart:
+		if event.Tool != nil {
+			return toolCallUpdate(*event.Tool), true
+		}
+	case EventToolDone:
+		if event.Tool != nil {
+			return toolCallDoneUpdate(*event.Tool), true
+		}
+	case EventFile:
+		if event.File != nil {
+			return fileMessageUpdate(*event.File), true
+		}
+	case EventUsage:
+		if event.Usage != nil {
+			return usageUpdate(event), true
+		}
+	case EventSessionInfo:
+		return sessionInfoUpdate(event.Title), event.Title != ""
 	}
-	s.sess.AppendEvent(assistantMessageUpdate(text))
-	return s.next.AssistantDelta(text)
-}
-
-func (s *recordingSink) AssistantFile(event FileEvent) error {
-	update := fileMessageUpdate(event)
-	s.sess.AppendEvent(update)
-	return s.next.AssistantFile(event)
-}
-
-func (s *recordingSink) ThoughtDelta(text string) error {
-	if text == "" {
-		return nil
-	}
-	s.sess.AppendEvent(thoughtUpdate(text))
-	return s.next.ThoughtDelta(text)
-}
-
-func (s *recordingSink) ToolCallStart(event ToolCallEvent) error {
-	s.sess.AppendEvent(toolCallUpdate(event))
-	return s.next.ToolCallStart(event)
-}
-
-func (s *recordingSink) ToolCallDone(event ToolCallEvent) error {
-	s.sess.AppendEvent(toolCallDoneUpdate(event))
-	return s.next.ToolCallDone(event)
-}
-
-func (s *recordingSink) SessionInfo(event SessionInfoEvent) error {
-	if event.Title == "" {
-		return nil
-	}
-	s.sess.AppendEvent(sessionInfoUpdate(event))
-	return s.next.SessionInfo(event)
-}
-
-func (s *recordingSink) Usage(event UsageEvent) error {
-	s.sess.AppendEvent(usageUpdate(event))
-	return s.next.Usage(event)
-}
-
-func (s *recordingSink) Done() error {
-	if err := s.sess.Save(); err != nil {
-		return err
-	}
-	return s.next.Done()
+	return acp.SessionUpdate{}, false
 }
 
 func userMessageUpdate(text string) acp.SessionUpdate {
@@ -90,7 +75,7 @@ func assistantMessageUpdate(text string) acp.SessionUpdate {
 	}
 }
 
-func fileMessageUpdate(event FileEvent) acp.SessionUpdate {
+func fileMessageUpdate(event File) acp.SessionUpdate {
 	contentType := "resource"
 	if strings.HasPrefix(event.MimeType, "image/") {
 		contentType = "image"
@@ -134,65 +119,70 @@ func thoughtUpdate(text string) acp.SessionUpdate {
 	}
 }
 
-func toolCallUpdate(event ToolCallEvent) acp.SessionUpdate {
+func toolCallUpdate(event ToolEvent) acp.SessionUpdate {
 	return acp.SessionUpdate{
 		SessionUpdate: "tool_call",
 		ToolCall:      acpToolCall(event),
 	}
 }
 
-func toolCallDoneUpdate(event ToolCallEvent) acp.SessionUpdate {
+func toolCallDoneUpdate(event ToolEvent) acp.SessionUpdate {
 	return acp.SessionUpdate{
 		SessionUpdate:  "tool_call_update",
 		ToolCallUpdate: acpToolCallUpdate(event, toolCallStatus(event)),
 	}
 }
 
-func sessionInfoUpdate(event SessionInfoEvent) acp.SessionUpdate {
+func sessionInfoUpdate(title string) acp.SessionUpdate {
 	return acp.SessionUpdate{
 		SessionUpdate: "session_info_update",
-		SessionInfo:   &acp.SessionInfoUpdate{Title: &event.Title},
+		SessionInfo:   &acp.SessionInfoUpdate{Title: &title},
 	}
 }
 
-func usageUpdate(event UsageEvent) acp.SessionUpdate {
+// usageUpdate reports how much of the context window the last model call
+// occupied: its whole prompt plus the response it produced.
+func usageUpdate(event Event) acp.SessionUpdate {
 	return acp.SessionUpdate{
 		SessionUpdate: "usage_update",
-		Usage:         &acp.UsageUpdate{},
+		Usage: &acp.UsageUpdate{
+			Size: uint64(event.ContextWindow),
+			Used: uint64(event.Usage.InputTokens + event.Usage.OutputTokens),
+		},
 	}
 }
 
-func toolCallStatus(event ToolCallEvent) acp.ToolCallStatus {
-	if event.Status == "failed" {
+func toolCallStatus(event ToolEvent) acp.ToolCallStatus {
+	if event.Failed {
 		return acp.ToolCallFailed
 	}
 	return acp.ToolCallCompleted
 }
 
-func toolTitle(event ToolCallEvent) string {
-	if event.Name == "" {
+func toolTitle(event ToolEvent) string {
+	if event.Call.Name == "" {
 		return "Tool call"
 	}
-	return event.Name
+	return event.Call.Name
 }
 
-func acpToolCall(event ToolCallEvent) *acp.ToolCall {
+func acpToolCall(event ToolEvent) *acp.ToolCall {
 	return &acp.ToolCall{
-		ToolCallID: acp.ToolCallID(event.ID),
+		ToolCallID: acp.ToolCallID(event.Call.ID),
 		Title:      toolTitle(event),
-		Kind:       toolKind(event.Name),
+		Kind:       toolKind(event.Call.Name),
 		Status:     acp.ToolCallInProgress,
 		Content: []acp.ToolCallContent{{
 			Type:    "content",
-			Content: &acp.ContentBlock{Type: "text", Text: event.Arguments},
+			Content: &acp.ContentBlock{Type: "text", Text: event.Call.Arguments},
 		}},
-		RawInput: rawJSONValue(event.Arguments),
+		RawInput: rawJSONValue(event.Call.Arguments),
 	}
 }
 
-func acpToolCallUpdate(event ToolCallEvent, status acp.ToolCallStatus) *acp.ToolCallUpdate {
+func acpToolCallUpdate(event ToolEvent, status acp.ToolCallStatus) *acp.ToolCallUpdate {
 	return &acp.ToolCallUpdate{
-		ToolCallID: acp.ToolCallID(event.ID),
+		ToolCallID: acp.ToolCallID(event.Call.ID),
 		Status:     &status,
 		Content: []acp.ToolCallContent{{
 			Type:    "content",

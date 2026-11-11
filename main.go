@@ -165,7 +165,7 @@ func runCommand(args []string) {
 	}
 
 	output := &stdoutWriter{}
-	sink := agent.NewRecordingSink(sess, output)
+	sink := agent.Record(sess, output.Handle)
 	ctx := context.Background()
 	rl := New("> ")
 
@@ -192,7 +192,7 @@ func runCommand(args []string) {
 		if sess.Title == "" {
 			sess.Title = sess.DisplayTitle()
 			if sess.Title != "" {
-				if err := sink.SessionInfo(agent.SessionInfoEvent{Title: sess.Title}); err != nil {
+				if err := sink(agent.Event{Type: agent.EventSessionInfo, Title: sess.Title}); err != nil {
 					fmt.Printf("Error: %v\n", err)
 					continue
 				}
@@ -221,75 +221,56 @@ type stdoutWriter struct {
 	mode stdoutMode
 }
 
-func (w *stdoutWriter) AssistantDelta(s string) error {
-	w.finishThought()
-	if w.md == nil {
-		w.md = NewMarkdownRenderer(os.Stdout)
+// Handle is the agent.Sink that renders a turn to the terminal.
+func (w *stdoutWriter) Handle(event agent.Event) error {
+	switch event.Type {
+	case agent.EventText:
+		w.finishThought()
+		if w.md == nil {
+			w.md = NewMarkdownRenderer(os.Stdout)
+		}
+		w.mode = stdoutModeAssistant
+		w.md.Write(event.Text)
+	case agent.EventThought:
+		w.flush()
+		if w.mode != stdoutModeThought {
+			fmt.Printf("\n%s[thought]%s %s", dim, reset, dim)
+			w.mode = stdoutModeThought
+		}
+		fmt.Print(event.Text)
+	case agent.EventFile:
+		w.finishThought()
+		w.flush()
+		file := event.File
+		if file.URI != "" {
+			fmt.Printf("\n[file] %s (%s, %d bytes): %s\n", file.Name, file.MimeType, file.Size, file.URI)
+		} else {
+			fmt.Printf("\n[file] %s (%s, %d bytes, inline)\n", file.Name, file.MimeType, file.Size)
+		}
+	case agent.EventToolStart:
+		w.finishThought()
+		w.flush()
+		fmt.Printf("\n[tool] %s(%s)\n", event.Tool.Call.Name, event.Tool.Call.Arguments)
+	case agent.EventToolDone:
+		w.finishThought()
+		status := "completed"
+		if event.Tool.Failed {
+			status = "failed"
+		}
+		fmt.Printf("[tool:%s] %s\n", status, event.Tool.Result)
+	case agent.EventDone:
+		w.finishThought()
+		w.flush()
+		fmt.Println()
+		w.mode = stdoutModeIdle
 	}
-	w.mode = stdoutModeAssistant
-	w.md.Write(s)
 	return nil
 }
 
-func (w *stdoutWriter) AssistantFile(event agent.FileEvent) error {
-	w.finishThought()
+func (w *stdoutWriter) flush() {
 	if w.md != nil {
 		w.md.Flush()
 	}
-	if event.URI != "" {
-		fmt.Printf("\n[file] %s (%s, %d bytes): %s\n", event.Name, event.MimeType, event.Size, event.URI)
-		return nil
-	}
-	fmt.Printf("\n[file] %s (%s, %d bytes, inline)\n", event.Name, event.MimeType, event.Size)
-	return nil
-}
-
-func (w *stdoutWriter) ThoughtDelta(s string) error {
-	if s == "" {
-		return nil
-	}
-	if w.md != nil {
-		w.md.Flush()
-	}
-	if w.mode != stdoutModeThought {
-		fmt.Printf("\n%s[thought]%s %s", dim, reset, dim)
-		w.mode = stdoutModeThought
-	}
-	fmt.Print(s)
-	return nil
-}
-
-func (w *stdoutWriter) ToolCallStart(event agent.ToolCallEvent) error {
-	w.finishThought()
-	if w.md != nil {
-		w.md.Flush()
-	}
-	fmt.Printf("\n[tool] %s(%s)\n", event.Name, event.Arguments)
-	return nil
-}
-
-func (w *stdoutWriter) ToolCallDone(event agent.ToolCallEvent) error {
-	w.finishThought()
-	fmt.Printf("[tool:%s] %s\n", event.Status, event.Result)
-	return nil
-}
-
-func (w *stdoutWriter) SessionInfo(event agent.SessionInfoEvent) error {
-	return nil
-}
-
-func (w *stdoutWriter) Usage(event agent.UsageEvent) error {
-	return nil
-}
-
-func (w *stdoutWriter) Done() error {
-	w.finishThought()
-	if w.md != nil {
-		w.md.Flush()
-	}
-	fmt.Println()
-	w.mode = stdoutModeIdle
-	return nil
 }
 
 func (w *stdoutWriter) finishThought() {

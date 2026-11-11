@@ -165,7 +165,7 @@ func TestUseAgentIncludesConfiguredMCPTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UseAgent: %v", err)
 	}
-	if _, ok := ag.tool("mcp_coffee_queryShopList"); !ok {
+	if ag.tool("mcp_coffee_queryShopList") == nil {
 		t.Fatalf("missing MCP tool; tools = %#v", ag.Tools)
 	}
 }
@@ -251,11 +251,11 @@ func TestReplaySessionReplaysEventLog(t *testing.T) {
 			}},
 			{ID: "evt_000002", Update: acp.SessionUpdate{
 				SessionUpdate: "tool_call",
-				ToolCall:      acpToolCall(ToolCallEvent{ID: "call-1", Name: "read_file", Arguments: `{"path":"README.md"}`}),
+				ToolCall:      acpToolCall(ToolEvent{Call: llm.ToolCall{ID: "call-1", Name: "read_file", Arguments: `{"path":"README.md"}`}}),
 			}},
 			{ID: "evt_000003", Update: acp.SessionUpdate{
 				SessionUpdate:  "tool_call_update",
-				ToolCallUpdate: acpToolCallUpdate(ToolCallEvent{ID: "call-1", Result: "hello"}, acp.ToolCallCompleted),
+				ToolCallUpdate: acpToolCallUpdate(ToolEvent{Call: llm.ToolCall{ID: "call-1"}, Result: "hello"}, acp.ToolCallCompleted),
 			}},
 		},
 	}
@@ -280,7 +280,7 @@ func TestReplaySessionReplaysEventLog(t *testing.T) {
 }
 
 func TestToolCallRawJSONValueMarshalsJSONSafely(t *testing.T) {
-	call := acpToolCall(ToolCallEvent{ID: "call-raw", Name: "exec", Arguments: `{"command":"yt-dlp -x"}`})
+	call := acpToolCall(ToolEvent{Call: llm.ToolCall{ID: "call-raw", Name: "exec", Arguments: `{"command":"yt-dlp -x"}`}})
 	if !json.Valid(call.RawInput) {
 		t.Fatalf("raw input is invalid JSON: %s", call.RawInput)
 	}
@@ -292,7 +292,7 @@ func TestToolCallRawJSONValueMarshalsJSONSafely(t *testing.T) {
 		t.Fatalf("command = %#v", got)
 	}
 
-	update := toolCallDoneUpdate(ToolCallEvent{ID: "call-raw", Result: `bad \x escape from tool output`})
+	update := toolCallDoneUpdate(ToolEvent{Call: llm.ToolCall{ID: "call-raw"}, Result: `bad \x escape from tool output`})
 	if _, err := json.Marshal(update); err != nil {
 		t.Fatalf("marshal update with raw output: %v", err)
 	}

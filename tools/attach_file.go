@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime"
 	"net/url"
@@ -14,20 +15,7 @@ import (
 	"github.com/lsongdev/miya-agents/llm"
 )
 
-const (
-	AttachFileEventType      = "miya.attach_file"
-	AttachFileDefaultMaxSize = 256 * 1024
-)
-
-type AttachFileResult struct {
-	Type     string `json:"type"`
-	Name     string `json:"name"`
-	MimeType string `json:"mimeType"`
-	Size     int    `json:"size"`
-	Data     string `json:"data,omitempty"`
-	URI      string `json:"uri,omitempty"`
-	Path     string `json:"path"`
-}
+const AttachFileDefaultMaxSize = 256 * 1024
 
 type AttachFileTool struct {
 	Workspace string
@@ -59,34 +47,52 @@ func (t *AttachFileTool) Def() llm.ToolDef {
 	}
 }
 
+// Run attaches the file and returns only the text shown to the model.
 func (t *AttachFileTool) Run(ctx context.Context, args string) string {
+	text, _ := t.RunFiles(ctx, args)
+	return text
+}
+
+// RunFiles implements FileTool.
+func (t *AttachFileTool) RunFiles(ctx context.Context, args string) (string, []File) {
+	file, err := t.attach(args)
+	if err != nil {
+		return "Error: " + err.Error(), nil
+	}
+	if file.Data != "" {
+		return fmt.Sprintf("Attached %s (%s, %d bytes) inline.", file.Name, file.MimeType, file.Size), []File{file}
+	}
+	return fmt.Sprintf("Attached %s (%s, %d bytes) as %s.", file.Name, file.MimeType, file.Size, file.URI), []File{file}
+}
+
+func (t *AttachFileTool) attach(args string) (File, error) {
 	var input struct {
 		Path           string `json:"path"`
 		MimeType       string `json:"mimeType,omitempty"`
 		MaxInlineBytes int    `json:"maxInlineBytes,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
-		return fmt.Sprintf("Error: failed to parse arguments: %v", err)
+		return File{}, fmt.Errorf("failed to parse arguments: %v", err)
 	}
 	if strings.TrimSpace(input.Path) == "" {
-		return "Error: path is required"
+		return File{}, errors.New("path is required")
 	}
 
 	path := fileResolvePath(input.Path, t.Workspace)
 	resolvedPath := fileAbsPath(path)
 	if t.Workspace != "" && !isPathWithinWorkspace(resolvedPath, t.Workspace) {
-		return fmt.Sprintf("Error: file %q is outside workspace %q", resolvedPath, t.Workspace)
+		return File{}, fmt.Errorf("file %q is outside workspace %q", resolvedPath, t.Workspace)
 	}
 
 	info, err := os.Stat(resolvedPath)
 	if err != nil {
-		return fmt.Sprintf("Error: failed to stat file: %s: %v", fileFormatPath(input.Path, resolvedPath), err)
+		return File{}, fmt.Errorf("failed to stat file: %s: %v", fileFormatPath(input.Path, resolvedPath), err)
 	}
 	if info.IsDir() {
-		return fmt.Sprintf("Error: path is a directory, not a file: %s", fileFormatPath(input.Path, resolvedPath))
+		return File{}, fmt.Errorf("path is a directory, not a file: %s", fileFormatPath(input.Path, resolvedPath))
 	}
 	if info.Size() > int64(^uint(0)>>1) {
-		return fmt.Sprintf("Error: file is too large to attach: %s", fileFormatPath(input.Path, resolvedPath))
+		return File{}, fmt.Errorf("file is too large to attach: %s", fileFormatPath(input.Path, resolvedPath))
 	}
 
 	maxInline := input.MaxInlineBytes
@@ -104,27 +110,20 @@ func (t *AttachFileTool) Run(ctx context.Context, args string) string {
 		mimeType = "application/octet-stream"
 	}
 
-	result := AttachFileResult{
-		Type:     AttachFileEventType,
+	file := File{
 		Name:     filepath.Base(resolvedPath),
 		MimeType: mimeType,
 		Size:     int(info.Size()),
 		URI:      fileURI(resolvedPath),
-		Path:     resolvedPath,
 	}
-	if int(info.Size()) <= maxInline {
+	if file.Size <= maxInline {
 		data, err := os.ReadFile(resolvedPath)
 		if err != nil {
-			return fmt.Sprintf("Error: failed to read file: %s: %v", fileFormatPath(input.Path, resolvedPath), err)
+			return File{}, fmt.Errorf("failed to read file: %s: %v", fileFormatPath(input.Path, resolvedPath), err)
 		}
-		result.Data = base64.StdEncoding.EncodeToString(data)
+		file.Data = base64.StdEncoding.EncodeToString(data)
 	}
-
-	payload, err := json.Marshal(result)
-	if err != nil {
-		return fmt.Sprintf("Error: failed to encode attachment: %v", err)
-	}
-	return string(payload)
+	return file, nil
 }
 
 func fileURI(path string) string {

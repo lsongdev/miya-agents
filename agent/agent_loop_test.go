@@ -47,21 +47,10 @@ func fakeAgent(responses ...[]any) (*Agent, *fakeModel) {
 	return &Agent{Name: "test", Model: model, ModelName: "test"}, model
 }
 
-type discardSink struct{}
-
-func (discardSink) AssistantDelta(string) error        { return nil }
-func (discardSink) AssistantFile(FileEvent) error      { return nil }
-func (discardSink) ThoughtDelta(string) error          { return nil }
-func (discardSink) ToolCallStart(ToolCallEvent) error  { return nil }
-func (discardSink) ToolCallDone(ToolCallEvent) error   { return nil }
-func (discardSink) SessionInfo(SessionInfoEvent) error { return nil }
-func (discardSink) Usage(UsageEvent) error             { return nil }
-func (discardSink) Done() error                        { return nil }
-
 func TestRunRejectsEmptyStream(t *testing.T) {
 	ag, _ := fakeAgent()
 
-	err := ag.Run(context.Background(), session.New("test"), discardSink{})
+	err := ag.Run(context.Background(), session.New("test"), Discard)
 	if err == nil || !strings.Contains(err.Error(), "closed without a response") {
 		t.Fatalf("Run error = %v", err)
 	}
@@ -71,7 +60,7 @@ func TestRunRejectsInterruptedStream(t *testing.T) {
 	ag, _ := fakeAgent([]any{llm.Delta{Text: "partial"}, errors.New("connection reset")})
 	sess := session.New("test")
 
-	err := ag.Run(context.Background(), sess, discardSink{})
+	err := ag.Run(context.Background(), sess, Discard)
 	if err == nil || !strings.Contains(err.Error(), "connection reset") {
 		t.Fatalf("Run error = %v", err)
 	}
@@ -83,7 +72,7 @@ func TestRunRejectsInterruptedStream(t *testing.T) {
 func TestRunRejectsToolCallWithoutID(t *testing.T) {
 	ag, _ := fakeAgent([]any{llm.Delta{ToolCall: &llm.ToolCallDelta{Name: "read_file", Arguments: `{}`}}})
 
-	err := ag.Run(context.Background(), session.New("test"), discardSink{})
+	err := ag.Run(context.Background(), session.New("test"), Discard)
 	if err == nil || !strings.Contains(err.Error(), "missing an id") {
 		t.Fatalf("Run error = %v", err)
 	}
@@ -96,7 +85,7 @@ func TestRunDoesNotPersistSession(t *testing.T) {
 
 	ag, _ := fakeAgent([]any{llm.Delta{Text: "done"}})
 
-	if err := ag.Run(context.Background(), session.New("test"), discardSink{}); err != nil {
+	if err := ag.Run(context.Background(), session.New("test"), Discard); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	sessions, err := session.List()
@@ -130,7 +119,7 @@ func TestRunExecutesToolCallsAndContinues(t *testing.T) {
 	sess := session.New("test")
 	sess.AppendRequest("go")
 
-	if err := ag.Run(context.Background(), sess, discardSink{}); err != nil {
+	if err := ag.Run(context.Background(), sess, Discard); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -159,5 +148,68 @@ func TestRunExecutesToolCallsAndContinues(t *testing.T) {
 	}
 	if got := sess.Messages[len(sess.Messages)-1].Text(); got != "all done" {
 		t.Fatalf("final message = %q", got)
+	}
+}
+
+type fileTool struct{}
+
+func (fileTool) Def() llm.ToolDef                   { return llm.ToolDef{Name: "attach"} }
+func (fileTool) Run(context.Context, string) string { return "attached" }
+func (fileTool) RunFiles(context.Context, string) (string, []File) {
+	return "attached", []File{{Name: "a.png", MimeType: "image/png", Size: 3, Data: "AAAA"}}
+}
+
+func TestRunReportsEventsInOrder(t *testing.T) {
+	usage := &llm.Usage{InputTokens: 100, OutputTokens: 20}
+	ag, _ := fakeAgent(
+		[]any{
+			llm.Delta{Thinking: "hm"},
+			llm.Delta{Text: "On it."},
+			llm.Delta{ToolCall: &llm.ToolCallDelta{ID: "c1", Name: "attach", Arguments: `{}`}},
+			llm.Delta{Usage: usage},
+		},
+		[]any{llm.Delta{Text: "Done."}},
+	)
+	ag.ContextWindow = 1000
+	ag.Tools = []Tool{fileTool{}}
+
+	var events []Event
+	sink := func(event Event) error {
+		events = append(events, event)
+		return nil
+	}
+	if err := ag.Run(context.Background(), session.New("test"), sink); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var types []string
+	for _, event := range events {
+		types = append(types, string(event.Type))
+	}
+	want := "thought text usage tool_start file tool_done text done"
+	if got := strings.Join(types, " "); got != want {
+		t.Fatalf("events = %q, want %q", got, want)
+	}
+	if got := events[2]; got.Usage != usage || got.ContextWindow != 1000 {
+		t.Fatalf("usage event = %#v", got)
+	}
+	if got := events[4].File; got.Name != "a.png" || got.Data != "AAAA" {
+		t.Fatalf("file event = %#v", got)
+	}
+	if got := events[5].Tool; got.Call.ID != "c1" || got.Result != "attached" || got.Failed {
+		t.Fatalf("tool_done event = %#v", got)
+	}
+}
+
+func TestRunStopsWhenSinkFails(t *testing.T) {
+	ag, model := fakeAgent([]any{llm.Delta{Text: "a"}, llm.Delta{Text: "b"}})
+	stop := errors.New("client went away")
+
+	err := ag.Run(context.Background(), session.New("test"), func(Event) error { return stop })
+	if !errors.Is(err, stop) {
+		t.Fatalf("Run error = %v", err)
+	}
+	if len(model.requests) != 1 {
+		t.Fatalf("model calls = %d", len(model.requests))
 	}
 }

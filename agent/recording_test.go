@@ -13,11 +13,11 @@ func TestRecordingSinkPersistsOnDone(t *testing.T) {
 	t.Cleanup(func() { config.ConfigPath = oldConfigPath })
 
 	sess := session.New("default")
-	sink := NewRecordingSink(sess, discardSink{})
-	if err := sink.AssistantDelta("hello"); err != nil {
+	sink := Record(sess, Discard)
+	if err := sink(Event{Type: EventText, Text: "hello"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := sink.Done(); err != nil {
+	if err := sink(Event{Type: EventDone}); err != nil {
 		t.Fatal(err)
 	}
 

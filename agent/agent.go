@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/lsongdev/miya-agents/llm"
@@ -25,16 +24,19 @@ type Agent struct {
 	System string
 	// MaxTokens limits each response. Zero leaves the choice to the model adapter.
 	MaxTokens int
-	Tools     []Tool
+	// ContextWindow is the model's context size in tokens, or zero if unknown.
+	ContextWindow int
+	Tools         []Tool
 }
 
-func (a *Agent) tool(name string) (Tool, bool) {
+// tool returns the named tool, or nil if the agent has none by that name.
+func (a *Agent) tool(name string) Tool {
 	for _, tool := range a.Tools {
 		if tool.Def().Name == name {
-			return tool, true
+			return tool
 		}
 	}
-	return nil, false
+	return nil
 }
 
 func (a *Agent) toolDefs() []llm.ToolDef {
@@ -48,7 +50,7 @@ func (a *Agent) toolDefs() []llm.ToolDef {
 // Run advances sess until the agent finishes its turn. Persistence is owned by
 // the caller; the same loop can therefore run persistent user sessions or
 // ephemeral delegated tasks.
-func (a *Agent) Run(ctx context.Context, sess *session.Session, sink EventSink) error {
+func (a *Agent) Run(ctx context.Context, sess *session.Session, sink Sink) error {
 	if a.Model == nil {
 		return fmt.Errorf("agent has no model")
 	}
@@ -61,10 +63,7 @@ func (a *Agent) Run(ctx context.Context, sess *session.Session, sink EventSink) 
 
 		calls := response.ToolCalls()
 		if len(calls) == 0 {
-			if err := sink.Usage(UsageEvent{}); err != nil {
-				return err
-			}
-			return sink.Done()
+			return sink(Event{Type: EventDone})
 		}
 		for _, call := range calls {
 			result, err := a.call(ctx, call, sink)
@@ -78,7 +77,7 @@ func (a *Agent) Run(ctx context.Context, sess *session.Session, sink EventSink) 
 
 // respond makes one model call and returns the complete assistant message,
 // forwarding text and thinking to sink as they arrive.
-func (a *Agent) respond(ctx context.Context, sess *session.Session, sink EventSink) (llm.Message, error) {
+func (a *Agent) respond(ctx context.Context, sess *session.Session, sink Sink) (llm.Message, error) {
 	req := &llm.Request{
 		Model:     a.ModelName,
 		System:    a.System,
@@ -95,12 +94,12 @@ func (a *Agent) respond(ctx context.Context, sess *session.Session, sink EventSi
 		received = true
 		builder.Add(delta)
 		if delta.Thinking != "" {
-			if err := sink.ThoughtDelta(delta.Thinking); err != nil {
+			if err := sink(Event{Type: EventThought, Text: delta.Thinking}); err != nil {
 				return llm.Message{}, err
 			}
 		}
 		if delta.Text != "" {
-			if err := sink.AssistantDelta(delta.Text); err != nil {
+			if err := sink(Event{Type: EventText, Text: delta.Text}); err != nil {
 				return llm.Message{}, err
 			}
 		}
@@ -117,64 +116,41 @@ func (a *Agent) respond(ctx context.Context, sess *session.Session, sink EventSi
 			return llm.Message{}, fmt.Errorf("tool call %q is missing an id", call.Name)
 		}
 	}
+	if builder.Usage != nil {
+		if err := sink(Event{Type: EventUsage, Usage: builder.Usage, ContextWindow: a.ContextWindow}); err != nil {
+			return llm.Message{}, err
+		}
+	}
 	return response, nil
 }
 
 // call runs one tool call and reports it to sink. A tool failure is returned
 // to the model as the result; only a sink failure is returned as an error.
-func (a *Agent) call(ctx context.Context, call llm.ToolCall, sink EventSink) (llm.ToolResult, error) {
-	event := ToolCallEvent{ID: call.ID, Name: call.Name, Arguments: call.Arguments, Status: "in_progress", Call: call}
-	if err := sink.ToolCallStart(event); err != nil {
+func (a *Agent) call(ctx context.Context, call llm.ToolCall, sink Sink) (llm.ToolResult, error) {
+	if err := sink(Event{Type: EventToolStart, Tool: &ToolEvent{Call: call}}); err != nil {
 		return llm.ToolResult{}, err
 	}
 
 	result := llm.ToolResult{ID: call.ID, Name: call.Name}
-	event.Status = "completed"
-	if tool, ok := a.tool(call.Name); ok {
+	var files []File
+	switch tool := a.tool(call.Name).(type) {
+	case tools.FileTool:
+		result.Content, files = tool.RunFiles(ctx, call.Arguments)
+	case Tool:
 		result.Content = tool.Run(ctx, call.Arguments)
-		if call.Name == "attach_file" {
-			attachmentResult, emitted, err := emitAttachedFileResult(sink, result.Content)
-			if err != nil {
-				result.Content = fmt.Sprintf("Error: %v", err)
-			} else if emitted {
-				result.Content = attachmentResult
-			}
-		}
-	} else {
-		event.Status = "failed"
+	default:
 		result.Content = fmt.Sprintf("Error: unknown tool '%s'", call.Name)
 		result.IsError = true
 	}
 
-	event.Result = result.Content
-	if err := sink.ToolCallDone(event); err != nil {
+	for _, file := range files {
+		if err := sink(Event{Type: EventFile, File: &file}); err != nil {
+			return llm.ToolResult{}, err
+		}
+	}
+	done := &ToolEvent{Call: call, Result: result.Content, Failed: result.IsError}
+	if err := sink(Event{Type: EventToolDone, Tool: done}); err != nil {
 		return llm.ToolResult{}, err
 	}
 	return result, nil
-}
-
-func emitAttachedFileResult(sink EventSink, result string) (string, bool, error) {
-	var attachment tools.AttachFileResult
-	if err := json.Unmarshal([]byte(result), &attachment); err != nil {
-		return result, false, nil
-	}
-	if attachment.Type != tools.AttachFileEventType {
-		return result, false, nil
-	}
-	if attachment.Data == "" && attachment.URI == "" {
-		return "", false, fmt.Errorf("attachment has neither inline data nor URI")
-	}
-	if err := sink.AssistantFile(FileEvent{
-		Name:     attachment.Name,
-		MimeType: attachment.MimeType,
-		Size:     attachment.Size,
-		Data:     attachment.Data,
-		URI:      attachment.URI,
-	}); err != nil {
-		return "", false, err
-	}
-	if attachment.Data != "" {
-		return fmt.Sprintf("Attached %s (%s, %d bytes) inline.", attachment.Name, attachment.MimeType, attachment.Size), true, nil
-	}
-	return fmt.Sprintf("Attached %s (%s, %d bytes) as %s.", attachment.Name, attachment.MimeType, attachment.Size, attachment.URI), true, nil
 }
