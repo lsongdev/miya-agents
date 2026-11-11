@@ -14,7 +14,7 @@ func (DefaultNotificationReceiver) UserMessageChunk(sessionID SessionID, content
 func (DefaultNotificationReceiver) AgentMessageChunk(sessionID SessionID, content ContentBlock, messageID *MessageID) {
 }
 
-func (DefaultNotificationReceiver) AgentThoughtChunk(sessionID SessionID, thought string, content ContentBlock) {
+func (DefaultNotificationReceiver) AgentThoughtChunk(sessionID SessionID, content ContentBlock, messageID *MessageID) {
 }
 
 func (DefaultNotificationReceiver) ToolCall(sessionID SessionID, toolCall *ToolCall) {}
@@ -80,7 +80,7 @@ func dispatchSessionUpdate(receiver NotificationReceiver, notification *SessionN
 	case "agent_message_chunk":
 		receiver.AgentMessageChunk(notification.SessionID, update.Content, update.MessageID)
 	case "agent_thought_chunk":
-		receiver.AgentThoughtChunk(notification.SessionID, update.Thought, update.Content)
+		receiver.AgentThoughtChunk(notification.SessionID, update.Content, update.MessageID)
 	case "tool_call":
 		receiver.ToolCall(notification.SessionID, update.ToolCall)
 	case "tool_call_update":

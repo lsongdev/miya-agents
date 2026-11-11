@@ -179,7 +179,7 @@ func fileMessageUpdate(event llm.Media) acp.SessionUpdate {
 func thoughtUpdate(text string) acp.SessionUpdate {
 	return acp.SessionUpdate{
 		SessionUpdate: "agent_thought_chunk",
-		Thought:       text,
+		Content:       acp.ContentBlock{Type: "text", Text: text},
 	}
 }
 

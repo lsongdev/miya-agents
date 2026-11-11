@@ -408,12 +408,9 @@ type UsageUpdate struct {
 type SessionUpdate struct {
 	SessionUpdate string `json:"sessionUpdate"`
 
-	// user_message_chunk / agent_message_chunk
+	// user_message_chunk / agent_message_chunk / agent_thought_chunk
 	Content   ContentBlock `json:"content,omitempty"`
 	MessageID *MessageID   `json:"messageId,omitempty"`
-
-	// agent_thought_chunk
-	Thought string `json:"thought,omitempty"`
 
 	// tool_call
 	ToolCall *ToolCall `json:"toolCall,omitempty"`
@@ -442,64 +439,118 @@ type SessionUpdate struct {
 	Meta Meta `json:"_meta,omitempty"`
 }
 
-func (u SessionUpdate) MarshalJSON() ([]byte, error) {
-	out := map[string]any{
-		"sessionUpdate": u.SessionUpdate,
+// The wire format of a session update places the variant's own fields next
+// to the "sessionUpdate" discriminator, e.g.
+//
+//	{"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read"}
+//
+// In Go, the fields of each variant live in their own struct, held by the
+// SessionUpdate field for that variant. MarshalJSON and UnmarshalJSON
+// translate between the two shapes.
+
+// contentChunk holds the fields of the three message chunk variants.
+type contentChunk struct {
+	Content   ContentBlock `json:"content"`
+	MessageID *MessageID   `json:"messageId,omitempty"`
+}
+
+// payload returns the struct that holds the variant's fields, allocating it
+// when it is nil, or nil for a variant this package does not know.
+func (u *SessionUpdate) payload() any {
+	switch u.SessionUpdate {
+	case "tool_call":
+		return alloc(&u.ToolCall)
+	case "tool_call_update":
+		return alloc(&u.ToolCallUpdate)
+	case "plan":
+		return alloc(&u.Plan)
+	case "available_commands_update":
+		return alloc(&u.AvailableCommands)
+	case "current_mode_update":
+		return alloc(&u.CurrentMode)
+	case "config_option_update":
+		return alloc(&u.ConfigOption)
+	case "session_info_update":
+		return alloc(&u.SessionInfo)
+	case "usage_update":
+		return alloc(&u.Usage)
 	}
-	if len(u.Meta) > 0 {
-		out["_meta"] = u.Meta
+	return nil
+}
+
+func alloc[T any](field **T) *T {
+	if *field == nil {
+		*field = new(T)
+	}
+	return *field
+}
+
+func isChunk(variant string) bool {
+	switch variant {
+	case "user_message_chunk", "agent_message_chunk", "agent_thought_chunk":
+		return true
+	}
+	return false
+}
+
+func (u SessionUpdate) MarshalJSON() ([]byte, error) {
+	var payload any
+	if isChunk(u.SessionUpdate) {
+		payload = contentChunk{Content: u.Content, MessageID: u.MessageID}
+	} else {
+		payload = u.payload()
 	}
 
-	switch u.SessionUpdate {
-	case "user_message_chunk", "agent_message_chunk":
-		out["content"] = u.Content
-		if u.MessageID != nil {
-			out["messageId"] = u.MessageID
+	fields := map[string]json.RawMessage{}
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
 		}
-	case "agent_thought_chunk":
-		if u.Thought != "" {
-			out["thought"] = u.Thought
+		if err := json.Unmarshal(data, &fields); err != nil {
+			return nil, err
 		}
-		if u.Content.Type != "" {
-			out["content"] = u.Content
+		// Optional fields are omitted rather than sent as null.
+		for key, value := range fields {
+			if string(value) == "null" {
+				delete(fields, key)
+			}
 		}
-	case "tool_call":
-		if u.ToolCall != nil {
-			out["toolCall"] = u.ToolCall
-		}
-	case "tool_call_update":
-		if u.ToolCallUpdate != nil {
-			out["toolCallUpdate"] = u.ToolCallUpdate
-		}
-	case "plan":
-		if u.Plan != nil {
-			out["plan"] = u.Plan
-		}
-	case "available_commands_update":
-		if u.AvailableCommands != nil {
-			out["availableCommands"] = u.AvailableCommands
-		}
-	case "current_mode_update":
-		if u.CurrentMode != nil {
-			out["currentMode"] = u.CurrentMode
-		}
-	case "config_option_update":
-		if u.ConfigOption != nil {
-			out["configOption"] = u.ConfigOption
-		}
-	case "session_info_update":
-		if u.SessionInfo != nil {
-			out["sessionInfo"] = u.SessionInfo
-		}
-	case "usage_update":
-		if u.Usage != nil {
-			out["usage"] = u.Usage
-		}
-	default:
-		type alias SessionUpdate
-		return json.Marshal(alias(u))
 	}
-	return json.Marshal(out)
+	discriminator, err := json.Marshal(u.SessionUpdate)
+	if err != nil {
+		return nil, err
+	}
+	fields["sessionUpdate"] = discriminator
+	if len(u.Meta) > 0 {
+		if fields["_meta"], err = json.Marshal(u.Meta); err != nil {
+			return nil, err
+		}
+	}
+	return json.Marshal(fields)
+}
+
+func (u *SessionUpdate) UnmarshalJSON(data []byte) error {
+	var head struct {
+		SessionUpdate string `json:"sessionUpdate"`
+		Meta          Meta   `json:"_meta"`
+	}
+	if err := json.Unmarshal(data, &head); err != nil {
+		return err
+	}
+	*u = SessionUpdate{SessionUpdate: head.SessionUpdate, Meta: head.Meta}
+	if isChunk(u.SessionUpdate) {
+		var chunk contentChunk
+		if err := json.Unmarshal(data, &chunk); err != nil {
+			return err
+		}
+		u.Content, u.MessageID = chunk.Content, chunk.MessageID
+		return nil
+	}
+	if payload := u.payload(); payload != nil {
+		return json.Unmarshal(data, payload)
+	}
+	return nil
 }
 
 // === JSON-RPC Request/Response Types ===

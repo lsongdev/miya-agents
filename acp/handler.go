@@ -13,7 +13,7 @@ type NotificationReceiver interface {
 	SessionUpdate(notification *SessionNotification)
 	UserMessageChunk(sessionID SessionID, content ContentBlock, messageID *MessageID)
 	AgentMessageChunk(sessionID SessionID, content ContentBlock, messageID *MessageID)
-	AgentThoughtChunk(sessionID SessionID, thought string, content ContentBlock)
+	AgentThoughtChunk(sessionID SessionID, content ContentBlock, messageID *MessageID)
 	ToolCall(sessionID SessionID, toolCall *ToolCall)
 	ToolCallUpdate(sessionID SessionID, update *ToolCallUpdate)
 	Plan(sessionID SessionID, plan *Plan)

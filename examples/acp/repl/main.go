@@ -27,7 +27,7 @@ func (r *replReceiver) AgentMessageChunk(sessionID acp.SessionID, content acp.Co
 	r.printText(content)
 }
 
-func (r *replReceiver) AgentThoughtChunk(sessionID acp.SessionID, thought string, content acp.ContentBlock) {
+func (r *replReceiver) AgentThoughtChunk(sessionID acp.SessionID, content acp.ContentBlock, messageID *acp.MessageID) {
 	r.streaming.Store(true)
 }
 

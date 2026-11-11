@@ -142,8 +142,8 @@ func (r *MyNotificationReceiver) AgentMessageChunk(sessionID acp.SessionID, cont
     }
 }
 
-func (r *MyNotificationReceiver) AgentThoughtChunk(sessionID acp.SessionID, thought string, content acp.ContentBlock) {
-    fmt.Printf("[thought] %s\n", thought)
+func (r *MyNotificationReceiver) AgentThoughtChunk(sessionID acp.SessionID, content acp.ContentBlock, messageID *acp.MessageID) {
+    fmt.Printf("[thought] %s\n", content.Text)
 }
 
 func (r *MyNotificationReceiver) ToolCall(sessionID acp.SessionID, toolCall *acp.ToolCall) {
@@ -159,7 +159,7 @@ Variant callbacks:
 ```go
 UserMessageChunk(sessionID, content, messageID)
 AgentMessageChunk(sessionID, content, messageID)
-AgentThoughtChunk(sessionID, thought, content)
+AgentThoughtChunk(sessionID, content, messageID)
 ToolCall(sessionID, toolCall)
 ToolCallUpdate(sessionID, update)
 Plan(sessionID, plan)

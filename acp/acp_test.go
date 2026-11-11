@@ -235,23 +235,66 @@ func TestSessionUpdateToolCallMarshalShape(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("Unmarshal raw: %v", err)
+	want := `{"content":[{"type":"content","content":{"type":"text","text":"{\"path\":\"README.md\"}"}}],"kind":"read","sessionUpdate":"tool_call","status":"in_progress","title":"Read","toolCallId":"tc-1"}`
+	if string(data) != want {
+		t.Fatalf("tool_call =\n%s\nwant\n%s", data, want)
 	}
-	if _, ok := raw["content"]; ok {
-		t.Fatalf("tool_call must not include top-level content: %s", data)
+}
+
+// Every variant's fields sit next to the discriminator, as the ACP schema
+// lays them out, and decode back to the same value.
+func TestSessionUpdateWireFormat(t *testing.T) {
+	status := ToolCallCompleted
+	title := "Renamed"
+	for _, tc := range []struct {
+		update SessionUpdate
+		wire   string
+	}{
+		{SessionUpdate{SessionUpdate: "agent_message_chunk", Content: ContentBlock{Type: "text", Text: "hi"}},
+			`{"content":{"type":"text","text":"hi"},"sessionUpdate":"agent_message_chunk"}`},
+		{SessionUpdate{SessionUpdate: "agent_thought_chunk", Content: ContentBlock{Type: "text", Text: "hm"}},
+			`{"content":{"type":"text","text":"hm"},"sessionUpdate":"agent_thought_chunk"}`},
+		{SessionUpdate{SessionUpdate: "tool_call_update", ToolCallUpdate: &ToolCallUpdate{ToolCallID: "t1", Status: &status}},
+			`{"sessionUpdate":"tool_call_update","status":"completed","toolCallId":"t1"}`},
+		{SessionUpdate{SessionUpdate: "plan", Plan: &Plan{Entries: []PlanEntry{{Content: "step", Priority: "high", Status: "pending"}}}},
+			`{"entries":[{"content":"step","status":"pending","priority":"high"}],"sessionUpdate":"plan"}`},
+		{SessionUpdate{SessionUpdate: "available_commands_update", AvailableCommands: &AvailableCommandsUpdate{AvailableCommands: []AvailableCommand{{Name: "compact", Description: "d"}}}},
+			`{"availableCommands":[{"name":"compact","description":"d"}],"sessionUpdate":"available_commands_update"}`},
+		{SessionUpdate{SessionUpdate: "current_mode_update", CurrentMode: &CurrentModeUpdate{CurrentModeID: "code"}},
+			`{"currentModeId":"code","sessionUpdate":"current_mode_update"}`},
+		{SessionUpdate{SessionUpdate: "session_info_update", SessionInfo: &SessionInfoUpdate{Title: &title}},
+			`{"sessionUpdate":"session_info_update","title":"Renamed"}`},
+		{SessionUpdate{SessionUpdate: "usage_update", Usage: &UsageUpdate{Size: 1000, Used: 80}},
+			`{"sessionUpdate":"usage_update","size":1000,"used":80}`},
+		{SessionUpdate{SessionUpdate: "agent_message_chunk", Content: ContentBlock{Type: "text", Text: "x"}, Meta: Meta{"k": "v"}},
+			`{"_meta":{"k":"v"},"content":{"type":"text","text":"x"},"sessionUpdate":"agent_message_chunk"}`},
+	} {
+		data, err := json.Marshal(tc.update)
+		if err != nil {
+			t.Fatalf("%s: Marshal: %v", tc.update.SessionUpdate, err)
+		}
+		if string(data) != tc.wire {
+			t.Errorf("%s =\n%s\nwant\n%s", tc.update.SessionUpdate, data, tc.wire)
+			continue
+		}
+		var decoded SessionUpdate
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("%s: Unmarshal: %v", tc.update.SessionUpdate, err)
+		}
+		again, _ := json.Marshal(decoded)
+		if string(again) != tc.wire {
+			t.Errorf("%s did not round trip:\n%s", tc.update.SessionUpdate, again)
+		}
 	}
-	var nested struct {
-		ToolCall struct {
-			Content []ToolCallContent `json:"content"`
-		} `json:"toolCall"`
+}
+
+func TestSessionUpdateDecodesUnknownVariant(t *testing.T) {
+	var update SessionUpdate
+	if err := json.Unmarshal([]byte(`{"sessionUpdate":"future_thing","x":1}`), &update); err != nil {
+		t.Fatal(err)
 	}
-	if err := json.Unmarshal(data, &nested); err != nil {
-		t.Fatalf("Unmarshal nested tool call: %v", err)
-	}
-	if len(nested.ToolCall.Content) != 1 {
-		t.Fatalf("toolCall.content = %#v", nested.ToolCall.Content)
+	if update.SessionUpdate != "future_thing" {
+		t.Fatalf("update = %#v", update)
 	}
 }
 
