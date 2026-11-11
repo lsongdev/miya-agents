@@ -1,7 +1,6 @@
 # Agent Loop Roadmap
 
-Status: implemented. All five steps of [Order of Work](#order-of-work) are done;
-what is left is listed under [Remaining](#remaining).
+Status: implemented. All five steps of [Order of Work](#order-of-work) are done.
 
 Updated: 2026-11-11
 
@@ -230,8 +229,6 @@ User guidance is kept, but as input rather than as the mechanism: the summary
 prompt has a default and is replaced by `COMPACT.md` in the agent workspace
 when that file exists.
 
-Later, if needed: a separately configured summary model, and pruning large
-old tool outputs in the projection before resorting to a summary.
 
 ## Titles
 
@@ -262,10 +259,13 @@ emits `session_info`.
 
 ## Remaining
 
-- Embedders construct the server as
-  `acpserver.New(runtime.New(cfg))`, replacing `agent.NewAgentManager(cfg)`.
-  `miya-channels` and `miya-desktop` need that one-line change when they
-  update this dependency.
+Nothing in this design is outstanding. Candidates for later, none started:
+
+- A summary model configured separately from the agent's model.
+- Pruning large old tool outputs from the context before summarizing.
+- Running the tool calls of one assistant message concurrently.
+
+Embedders construct the server as `acpserver.New(runtime.New(cfg))`.
 
 ## Notes
 
